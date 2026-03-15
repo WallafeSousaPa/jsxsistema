@@ -65,6 +65,9 @@ export function Login() {
   return (
     <div className="page login-page">
       <div className="login-card">
+        <div className="login-logo">
+          <img src="/LogoJSX.PNG" alt="JSX" />
+        </div>
         <h1>JSX Sistema</h1>
         <p className="subtitle">Entre com suas credenciais</p>
 
