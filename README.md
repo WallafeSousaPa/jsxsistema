@@ -10,6 +10,14 @@ Sistema web com integração Supabase para base de dados.
 
 As funções e integrações serão implementadas por partes.
 
+## Login
+
+O login é controlado pelo sistema (não usa Supabase Auth). Os usuários ficam na tabela `usuarios`. Para criar a tabela e um usuário de teste:
+
+1. No painel do Supabase: **SQL Editor** → **New query**
+2. Copie e execute o conteúdo do arquivo `supabase/usuarios.sql`
+3. Usuário de teste: **admin@jsxsistema.com** / **123456**
+
 ## Pré-requisitos
 
 - Node.js 18+

@@ -1,6 +1,15 @@
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
+import { useAuth } from '../contexts/AuthContext'
 
 export function Instalacao() {
+  const { signOut } = useAuth()
+  const navigate = useNavigate()
+
+  async function handleSair() {
+    await signOut()
+    navigate('/', { replace: true })
+  }
+
   return (
     <div className="page">
       <header className="page-header">
@@ -8,7 +17,9 @@ export function Instalacao() {
         <nav className="nav-links">
           <Link to="/vistorias">Vistorias</Link>
           <Link to="/instalacao">Instalação</Link>
-          <Link to="/">Sair</Link>
+          <Link to="/clientes">Clientes</Link>
+          <Link to="/usuarios">Usuarios</Link>
+          <button type="button" className="link-btn" onClick={handleSair}>Sair</button>
         </nav>
       </header>
 

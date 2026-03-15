@@ -1,0 +1,2 @@
+-- Este arquivo não é mais utilizado: o projeto não usa políticas RLS.
+-- Para desativar todas as políticas, execute disable_rls.sql no SQL Editor do Supabase.
