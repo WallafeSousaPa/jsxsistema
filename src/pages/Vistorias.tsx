@@ -222,19 +222,6 @@ export function Vistorias() {
     }
   }
 
-  function abrirCadastro() {
-    setVistoriaEmEdicaoId(null)
-    setForm(formVazio)
-    setClienteSearch('')
-    setClienteDropdownOpen(false)
-    setFotoErroPorCampo({})
-    setFotoPreviewTemp((prev) => {
-      Object.values(prev).forEach((url) => { if (url) URL.revokeObjectURL(url) })
-      return {}
-    })
-    setModalAberto(true)
-  }
-
   async function abrirParaEdicao(v: Vistoria) {
     const formFromV = vistoriaToForm(v)
     const { data: respData } = await supabase
@@ -318,6 +305,7 @@ export function Vistorias() {
       setModalMensagemAberto(true)
       return
     }
+    if (!user) return
     setAgendarSalvando(true)
     try {
       const { data: vistoria, error } = await supabase
