@@ -32,6 +32,8 @@ const formVazio: VistoriaForm = {
   link_foto_estrutura_telhado: '',
   link_foto_telhado: '',
   link_foto_print_mapa: '',
+  link_foto_croqui: '',
+  link_foto_relatorio_tecnico: '',
   observacao: '',
   id_responsaveis: [],
 }
@@ -218,6 +220,8 @@ export function Vistorias() {
       link_foto_estrutura_telhado: v.link_foto_estrutura_telhado ?? '',
       link_foto_telhado: v.link_foto_telhado ?? '',
       link_foto_print_mapa: v.link_foto_print_mapa ?? '',
+      link_foto_croqui: v.link_foto_croqui ?? '',
+      link_foto_relatorio_tecnico: v.link_foto_relatorio_tecnico ?? '',
       observacao: v.observacao ?? '',
     }
   }
@@ -485,10 +489,12 @@ export function Vistorias() {
         link_foto_local_inversor: form.link_foto_local_inversor.trim() || null,
         link_foto_aterramento: form.link_foto_aterramento.trim() || null,
         link_foto_estrutura_telhado: form.link_foto_estrutura_telhado.trim() || null,
-        link_foto_telhado: form.link_foto_telhado.trim() || null,
-        link_foto_print_mapa: form.link_foto_print_mapa.trim() || null,
-        observacao: form.observacao.trim() || null,
-      }
+      link_foto_telhado: form.link_foto_telhado.trim() || null,
+      link_foto_print_mapa: form.link_foto_print_mapa.trim() || null,
+      link_foto_croqui: form.link_foto_croqui.trim() || null,
+      link_foto_relatorio_tecnico: form.link_foto_relatorio_tecnico.trim() || null,
+      observacao: form.observacao.trim() || null,
+    }
 
       if (vistoriaEmEdicaoId) {
         const { error } = await supabase
@@ -558,6 +564,8 @@ export function Vistorias() {
       link_foto_estrutura_telhado: 'Estrutura do telhado',
       link_foto_telhado: 'Telhado',
       link_foto_print_mapa: 'Print do mapa',
+      link_foto_croqui: 'Croqui',
+      link_foto_relatorio_tecnico: 'Relatório técnico',
     }
 
     const fotosHtml = (
@@ -572,6 +580,8 @@ export function Vistorias() {
         'link_foto_estrutura_telhado',
         'link_foto_telhado',
         'link_foto_print_mapa',
+        'link_foto_croqui',
+        'link_foto_relatorio_tecnico',
       ] as const
     )
       .map((key) => {
@@ -1040,6 +1050,8 @@ export function Vistorias() {
                   { key: 'link_foto_estrutura_telhado' as const, label: 'Foto da estrutura do telhado' },
                   { key: 'link_foto_telhado' as const, label: 'Foto do telhado' },
                   { key: 'link_foto_print_mapa' as const, label: 'Foto do print do mapa' },
+                  { key: 'link_foto_croqui' as const, label: 'Foto do croqui' },
+                  { key: 'link_foto_relatorio_tecnico' as const, label: 'Foto do relatório técnico' },
                 ].map(({ key, label }) => {
                   const isMulti = CAMPOS_MULTI_FOTO.includes(key)
                   const enviando = fotoEnviando === key
@@ -1430,6 +1442,8 @@ export function Vistorias() {
                     { key: 'link_foto_estrutura_telhado' as const, label: 'Estrutura do telhado' },
                     { key: 'link_foto_telhado' as const, label: 'Telhado' },
                     { key: 'link_foto_print_mapa' as const, label: 'Print do mapa' },
+                    { key: 'link_foto_croqui' as const, label: 'Croqui' },
+                    { key: 'link_foto_relatorio_tecnico' as const, label: 'Relatório técnico' },
                   ].map(({ key, label }) => {
                     const val = vistoriaDetalhe[key] as string | null | undefined
                     const urls = val?.trim() ? val.split(DELIM_MULTI_FOTO).filter(Boolean) : []

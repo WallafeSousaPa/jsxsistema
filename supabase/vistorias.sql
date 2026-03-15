@@ -27,6 +27,8 @@ create table if not exists public.vistorias (
   link_foto_estrutura_telhado text,
   link_foto_telhado text,
   link_foto_print_mapa text,
+  link_foto_croqui text,
+  link_foto_relatorio_tecnico text,
   observacao text
 );
 

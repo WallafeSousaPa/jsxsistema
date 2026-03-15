@@ -30,6 +30,8 @@ export type Vistoria = {
   link_foto_estrutura_telhado: string | null
   link_foto_telhado: string | null
   link_foto_print_mapa: string | null
+  link_foto_croqui: string | null
+  link_foto_relatorio_tecnico: string | null
   observacao: string | null
 }
 
@@ -54,6 +56,8 @@ export type VistoriaForm = {
   link_foto_estrutura_telhado: string
   link_foto_telhado: string
   link_foto_print_mapa: string
+  link_foto_croqui: string
+  link_foto_relatorio_tecnico: string
   observacao: string
   id_responsaveis: string[]
 }
