@@ -71,6 +71,46 @@
   margin-bottom: 0.75rem;
 }
 
+/* Dashboard */
+.dashboard-cards {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 1rem;
+}
+
+@media (min-width: 768px) {
+  .dashboard-cards {
+    grid-template-columns: repeat(2, 1fr);
+    align-items: stretch;
+  }
+}
+
+.dashboard-report-card {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.dashboard-report-title {
+  margin: 0 0 0.5rem;
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: var(--text-h);
+}
+
+.dashboard-total {
+  margin: 0;
+  font-size: 1.25rem;
+}
+
+.dashboard-status-list li {
+  border-bottom: 1px solid var(--border);
+}
+
+.dashboard-status-list li:last-child {
+  border-bottom: none;
+}
+
 .placeholder-text {
   color: var(--text);
   margin-bottom: 1rem;
@@ -196,23 +236,6 @@
 .btn-secondary:disabled {
   opacity: 0.7;
   cursor: not-allowed;
-}
-
-.connection-test {
-  margin-top: 1.5rem;
-  padding-top: 1.5rem;
-  border-top: 1px solid var(--border);
-  text-align: center;
-}
-
-.connection-test .btn {
-  margin-bottom: 0.5rem;
-}
-
-.test-ok {
-  color: #059669;
-  font-size: 0.9rem;
-  margin: 0.5rem 0 0;
 }
 
 .test-erro {
@@ -613,10 +636,11 @@
   }
 }
 
-/* Modal Bootstrap (Cadastrar vistoria): garantir barra de rolagem */
+/* Modal Bootstrap (vistoria / instalação): barra de rolagem no corpo */
 .modal-body-scroll {
-  max-height: 70vh;
   overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  max-height: min(70vh, calc(100dvh - 11rem));
 }
 
 /* Status das fotos na vistoria: altura fixa para não pular */
@@ -689,5 +713,149 @@
 @media (min-width: 1200px) {
   .vistoria-modal .modal-dialog {
     max-width: 90vw;
+  }
+}
+
+/* ========== Vistorias & Instalação: responsivo (mobile / tablet) ========== */
+
+/* Cabeçalho do card: título + botões empilham em telas estreitas */
+@media (max-width: 767.98px) {
+  .card-header-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .card-header-row h2 {
+    font-size: 1.1rem;
+  }
+
+  .card-header-row .btn {
+    width: 100%;
+    margin-right: 0 !important;
+    margin-bottom: 0.5rem;
+  }
+
+  .card-header-row .btn:last-child {
+    margin-bottom: 0;
+  }
+}
+
+/* Tabelas: rolagem suave e texto legível em telas pequenas */
+.page-content .table-responsive {
+  -webkit-overflow-scrolling: touch;
+}
+
+@media (max-width: 575.98px) {
+  .page-content .table {
+    font-size: 0.8125rem;
+  }
+
+  .page-content .table th,
+  .page-content .table td {
+    padding: 0.45rem 0.35rem;
+    vertical-align: middle;
+  }
+
+  .page-content .table .btn-sm {
+    padding: 0.2rem 0.35rem;
+  }
+}
+
+/* Modais Bootstrap (vistoria-modal): altura útil e áreas seguras */
+.vistoria-modal .modal-content {
+  max-height: min(100vh, 100dvh);
+  padding-bottom: env(safe-area-inset-bottom, 0);
+}
+
+/* Fullscreen em md↓: corpo ocupa o espaço entre header e footer */
+@media (max-width: 767.98px) {
+  .vistoria-modal .modal-dialog.modal-fullscreen-md-down {
+    height: 100%;
+    max-height: 100dvh;
+    margin: 0;
+  }
+
+  .vistoria-modal .modal-dialog.modal-fullscreen-md-down .modal-content {
+    height: 100%;
+    max-height: 100dvh;
+    border-radius: 0;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .vistoria-modal .modal-dialog.modal-fullscreen-md-down .modal-body-scroll {
+    flex: 1 1 auto;
+    min-height: 0;
+    max-height: none;
+  }
+
+  .vistoria-modal .modal-dialog:not(.modal-fullscreen-md-down) {
+    margin: 0.5rem;
+    max-width: calc(100% - 1rem);
+  }
+
+  .vistoria-modal .modal-footer {
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    padding-left: max(0.75rem, env(safe-area-inset-left));
+    padding-right: max(0.75rem, env(safe-area-inset-right));
+    padding-bottom: max(0.75rem, env(safe-area-inset-bottom));
+  }
+
+  .vistoria-modal .modal-header {
+    padding-top: max(0.75rem, env(safe-area-inset-top));
+    padding-left: max(1rem, env(safe-area-inset-left));
+    padding-right: max(1rem, env(safe-area-inset-right));
+  }
+}
+
+@media (max-width: 575.98px) {
+  .vistoria-modal .modal-footer {
+    flex-direction: column-reverse;
+    align-items: stretch;
+  }
+
+  .vistoria-modal .modal-footer .btn {
+    width: 100%;
+    margin: 0;
+  }
+
+  .vistoria-modal .modal-footer .btn + .btn {
+    margin-top: 0;
+  }
+}
+
+/* Filtros Vistorias: dropdown não estoura a tela */
+@media (max-width: 575.98px) {
+  .vistorias-filtros .dropdown-menu.show {
+    max-width: min(100vw - 2rem, 320px);
+  }
+}
+
+/* Modal com scrollable (detalhe / agendar): limita altura à viewport em mobile */
+@media (max-width: 767.98px) {
+  .vistoria-modal .modal-dialog-scrollable .modal-content {
+    max-height: min(calc(100dvh - 1rem), calc(100vh - 1rem));
+  }
+}
+
+/* Listas de definição nos modais de detalhe: empilhar rótulo/valor no telefone */
+@media (max-width: 575.98px) {
+  .vistoria-modal dl.row.g-2 dt.col-sm-4 {
+    padding-bottom: 0;
+    margin-bottom: 0.1rem;
+  }
+
+  .vistoria-modal dl.row.g-2 dd.col-sm-8 {
+    padding-top: 0;
+    margin-bottom: 0.65rem;
+    padding-bottom: 0.65rem;
+    border-bottom: 1px solid var(--bs-border-color-translucent, #dee2e6);
+  }
+
+  .vistoria-modal dl.row.g-2 dd.col-sm-8:last-child {
+    border-bottom: none;
+    margin-bottom: 0;
+    padding-bottom: 0;
   }
 }

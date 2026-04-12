@@ -199,6 +199,7 @@ export function Usuarios() {
       <header className="page-header">
         <h1>Usuários</h1>
         <nav className="nav-links">
+          <Link to="/dashboard">Dashboard</Link>
           <Link to="/vistorias">Vistorias</Link>
           <Link to="/instalacao">Instalação</Link>
           <Link to="/clientes">Clientes</Link>

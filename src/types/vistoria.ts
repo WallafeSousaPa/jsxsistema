@@ -35,29 +35,33 @@ export type Vistoria = {
   observacao: string | null
 }
 
+/** Tipo de entrada do campo (definido em Campos da vistoria). */
+export const TIPO_CAMPO_VISTORIA = ['foto', 'texto', 'numero'] as const
+export type TipoCampoVistoria = (typeof TIPO_CAMPO_VISTORIA)[number]
+
+/** Configuração de campo dinâmico (tabela vistoria_campos). */
+export type VistoriaCampo = {
+  id: number
+  chave: string
+  nome_campo: string
+  /** Preferir `tipo_campo`; `permitir_fotos` permanece sincronizado (foto = true). */
+  tipo_campo?: TipoCampoVistoria
+  permitir_fotos: boolean
+  permite_multiplas_fotos: boolean
+  ordem: number
+  grupo: string
+}
+
+/** Valor por campo na edição (tabela vistoria_campo_valores). */
+export type ValorCampoEdicao = {
+  valorTexto: string
+  linkFoto: string
+}
+
 export type VistoriaForm = {
   cpf_cliente: string
   status: StatusVistoria
-  tipo_padrao: string
-  onde_ligado_inversor: string
-  percurso_cabo_inversor: string
-  qtd_eletrodutos_inversor_cc: string
-  qtd_eletrodutos_inversor_ca: string
-  qtd_conduletes_inversor: string
-  qtd_eletrodutos_padrao: string
-  metragem_total_cabos_padrao: string
-  link_foto_fachada: string
-  link_foto_padrao_entrada: string
-  link_foto_disjuntor_padrao: string
-  link_foto_poste_mais_proximo: string
-  link_foto_ramal_entrada: string
-  link_foto_local_inversor: string
-  link_foto_aterramento: string
-  link_foto_estrutura_telhado: string
-  link_foto_telhado: string
-  link_foto_print_mapa: string
-  link_foto_croqui: string
-  link_foto_relatorio_tecnico: string
-  observacao: string
+  /** id do campo → texto ou link(s) conforme permitir_fotos */
+  valoresPorCampo: Record<number, ValorCampoEdicao>
   id_responsaveis: string[]
 }

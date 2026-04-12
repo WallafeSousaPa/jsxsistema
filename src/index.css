@@ -41,6 +41,10 @@ body {
   margin: 0;
 }
 
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
 h1, h2 {
   font-weight: 600;
   color: var(--text-h);

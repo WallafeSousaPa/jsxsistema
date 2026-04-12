@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useMemo } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { Modal as BSModal } from 'react-bootstrap'
 import { useAuth } from '../contexts/AuthContext'
@@ -8,34 +8,181 @@ import type { Cliente } from '../types/cliente'
 
 type ClienteSelect = Pick<Cliente, 'id' | 'cpf' | 'nome' | 'cep' | 'logradouro' | 'numero' | 'complemento' | 'bairro' | 'cidade' | 'estado'>
 import type { Usuario } from '../contexts/AuthContext'
-import type { Vistoria, VistoriaForm } from '../types/vistoria'
+import type { Vistoria, VistoriaForm, VistoriaCampo, ValorCampoEdicao, TipoCampoVistoria } from '../types/vistoria'
 import { TIPO_PADRAO, ONDE_LIGADO_INVERSOR, STATUS_VISTORIA } from '../types/vistoria'
+
+const GRUPOS_PADRAO_VISTORIA = [
+  'Padrão e inversor',
+  'Eletrodutos e cabos',
+  'Fotos',
+  'Observação',
+  'Outros',
+] as const
+
+const VALOR_GRUPO_OUTRO = '__custom__'
 
 const formVazio: VistoriaForm = {
   cpf_cliente: '',
   status: 'Novo',
-  tipo_padrao: '',
-  onde_ligado_inversor: '',
-  percurso_cabo_inversor: '',
-  qtd_eletrodutos_inversor_cc: '',
-  qtd_eletrodutos_inversor_ca: '',
-  qtd_conduletes_inversor: '',
-  qtd_eletrodutos_padrao: '',
-  metragem_total_cabos_padrao: '',
-  link_foto_fachada: '',
-  link_foto_padrao_entrada: '',
-  link_foto_disjuntor_padrao: '',
-  link_foto_poste_mais_proximo: '',
-  link_foto_ramal_entrada: '',
-  link_foto_local_inversor: '',
-  link_foto_aterramento: '',
-  link_foto_estrutura_telhado: '',
-  link_foto_telhado: '',
-  link_foto_print_mapa: '',
-  link_foto_croqui: '',
-  link_foto_relatorio_tecnico: '',
-  observacao: '',
+  valoresPorCampo: {},
   id_responsaveis: [],
+}
+
+function valoresVaziosPorCampos(campos: VistoriaCampo[]): Record<number, ValorCampoEdicao> {
+  const o: Record<number, ValorCampoEdicao> = {}
+  for (const c of campos) {
+    o[c.id] = { valorTexto: '', linkFoto: '' }
+  }
+  return o
+}
+
+/** Mantém colunas legadas em `vistorias` preenchidas para lista/PDF (campos com chave conhecida). */
+function montarPayloadVistoriasLegado(campos: VistoriaCampo[], valoresPorCampo: Record<number, ValorCampoEdicao>) {
+  const getVt = (chave: string) => valoresPorCampo[campos.find((c) => c.chave === chave)?.id ?? -1]?.valorTexto?.trim() ?? ''
+  const getLf = (chave: string) => valoresPorCampo[campos.find((c) => c.chave === chave)?.id ?? -1]?.linkFoto?.trim() ?? ''
+
+  const tipo = getVt('tipo_padrao')
+  const percurso = getVt('percurso_cabo_inversor')
+  const q = (ch: string) => {
+    const s = getVt(ch)
+    if (s === '') return null
+    const n = parseInt(s, 10)
+    return Number.isFinite(n) ? n : null
+  }
+  const metr = getVt('metragem_total_cabos_padrao')
+  let metrNum: number | null = null
+  if (metr !== '') {
+    const f = parseFloat(metr.replace(',', '.'))
+    metrNum = Number.isFinite(f) ? f : null
+  }
+
+  return {
+    tipo_padrao: tipo ? (tipo as Vistoria['tipo_padrao']) : null,
+    onde_ligado_inversor: getVt('onde_ligado_inversor') || null,
+    percurso_cabo_inversor: percurso || null,
+    qtd_eletrodutos_inversor_cc: q('qtd_eletrodutos_inversor_cc'),
+    qtd_eletrodutos_inversor_ca: q('qtd_eletrodutos_inversor_ca'),
+    qtd_conduletes_inversor: q('qtd_conduletes_inversor'),
+    qtd_eletrodutos_padrao: q('qtd_eletrodutos_padrao'),
+    metragem_total_cabos_padrao: metrNum,
+    link_foto_fachada: getLf('link_foto_fachada') || null,
+    link_foto_padrao_entrada: getLf('link_foto_padrao_entrada') || null,
+    link_foto_disjuntor_padrao: getLf('link_foto_disjuntor_padrao') || null,
+    link_foto_poste_mais_proximo: getLf('link_foto_poste_mais_proximo') || null,
+    link_foto_ramal_entrada: getLf('link_foto_ramal_entrada') || null,
+    link_foto_local_inversor: getLf('link_foto_local_inversor') || null,
+    link_foto_aterramento: getLf('link_foto_aterramento') || null,
+    link_foto_estrutura_telhado: getLf('link_foto_estrutura_telhado') || null,
+    link_foto_telhado: getLf('link_foto_telhado') || null,
+    link_foto_print_mapa: getLf('link_foto_print_mapa') || null,
+    link_foto_croqui: getLf('link_foto_croqui') || null,
+    link_foto_relatorio_tecnico: getLf('link_foto_relatorio_tecnico') || null,
+    observacao: getVt('observacao') || null,
+  }
+}
+
+function slugChaveCampo(nome: string) {
+  const base = nome
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_|_$/g, '')
+    .slice(0, 48)
+  return `campo_${base || 'novo'}_${Date.now().toString(36)}`
+}
+
+/** Chaves padrão mapeiam para colunas em `vistorias` (fallback se ainda não houver linha em vistoria_campo_valores). */
+const LEGACY_CAMPO_PARA_COLUNA_VISTORIA: Partial<Record<string, keyof Vistoria>> = {
+  tipo_padrao: 'tipo_padrao',
+  onde_ligado_inversor: 'onde_ligado_inversor',
+  percurso_cabo_inversor: 'percurso_cabo_inversor',
+  qtd_eletrodutos_inversor_cc: 'qtd_eletrodutos_inversor_cc',
+  qtd_eletrodutos_inversor_ca: 'qtd_eletrodutos_inversor_ca',
+  qtd_conduletes_inversor: 'qtd_conduletes_inversor',
+  qtd_eletrodutos_padrao: 'qtd_eletrodutos_padrao',
+  metragem_total_cabos_padrao: 'metragem_total_cabos_padrao',
+  link_foto_fachada: 'link_foto_fachada',
+  link_foto_padrao_entrada: 'link_foto_padrao_entrada',
+  link_foto_disjuntor_padrao: 'link_foto_disjuntor_padrao',
+  link_foto_poste_mais_proximo: 'link_foto_poste_mais_proximo',
+  link_foto_ramal_entrada: 'link_foto_ramal_entrada',
+  link_foto_local_inversor: 'link_foto_local_inversor',
+  link_foto_aterramento: 'link_foto_aterramento',
+  link_foto_estrutura_telhado: 'link_foto_estrutura_telhado',
+  link_foto_telhado: 'link_foto_telhado',
+  link_foto_print_mapa: 'link_foto_print_mapa',
+  link_foto_croqui: 'link_foto_croqui',
+  link_foto_relatorio_tecnico: 'link_foto_relatorio_tecnico',
+  observacao: 'observacao',
+}
+
+function inferTipoCampoFromChave(chave: string, permitirFotos: boolean): TipoCampoVistoria {
+  if (permitirFotos) return 'foto'
+  if (
+    chave === 'percurso_cabo_inversor' ||
+    chave.startsWith('qtd_') ||
+    chave === 'metragem_total_cabos_padrao'
+  ) {
+    return 'numero'
+  }
+  return 'texto'
+}
+
+function normalizarTipoCampo(c: VistoriaCampo): TipoCampoVistoria {
+  const t = c.tipo_campo
+  if (t === 'foto' || t === 'texto' || t === 'numero') return t
+  return inferTipoCampoFromChave(c.chave, c.permitir_fotos)
+}
+
+function campoEhFoto(c: VistoriaCampo): boolean {
+  return normalizarTipoCampo(c) === 'foto'
+}
+
+function rotuloTipoCampo(c: VistoriaCampo): string {
+  const n = normalizarTipoCampo(c)
+  if (n === 'foto') return 'Foto'
+  if (n === 'numero') return 'Números'
+  return 'Texto'
+}
+
+function preencherValoresLegadoVistoria(v: Vistoria, campos: VistoriaCampo[], vals: Record<number, ValorCampoEdicao>) {
+  for (const c of campos) {
+    const col = LEGACY_CAMPO_PARA_COLUNA_VISTORIA[c.chave]
+    if (!col) continue
+    const bruto = v[col]
+    if (bruto === null || bruto === undefined || bruto === '') continue
+    const atual = vals[c.id] ?? { valorTexto: '', linkFoto: '' }
+    if (campoEhFoto(c)) {
+      if (atual.linkFoto.trim()) continue
+      vals[c.id] = { ...atual, linkFoto: String(bruto) }
+    } else {
+      if (atual.valorTexto.trim()) continue
+      vals[c.id] = { ...atual, valorTexto: typeof bruto === 'number' ? String(bruto) : String(bruto) }
+    }
+  }
+}
+
+function ordemGruposCampos(campos: VistoriaCampo[]): string[] {
+  const sorted = [...campos].sort((a, b) => a.ordem - b.ordem)
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const c of sorted) {
+    if (!seen.has(c.grupo)) {
+      seen.add(c.grupo)
+      out.push(c.grupo)
+    }
+  }
+  return out
+}
+
+function colClassCampoVistoria(c: VistoriaCampo): string {
+  if (campoEhFoto(c)) return 'col-12 col-sm-6 col-lg-4 vistoria-foto-cell'
+  if (c.chave === 'observacao') return 'col-12'
+  if (c.chave === 'metragem_total_cabos_padrao') return 'col-12 col-lg-6'
+  if (c.chave.startsWith('qtd_')) return 'col-6 col-md-4 col-lg-3'
+  if (c.chave === 'percurso_cabo_inversor') return 'col-12 col-sm-6 col-md-4'
+  return 'col-12 col-sm-6'
 }
 
 export function Vistorias() {
@@ -53,12 +200,14 @@ export function Vistorias() {
   const [clienteSearch, setClienteSearch] = useState('')
   const [clienteDropdownOpen, setClienteDropdownOpen] = useState(false)
   const clienteSearchRef = useRef<HTMLDivElement>(null)
+  const [camposVistoria, setCamposVistoria] = useState<VistoriaCampo[]>([])
   const [fotoEnviando, setFotoEnviando] = useState<string | null>(null)
   const [fotoNomeEnviando, setFotoNomeEnviando] = useState<string>('')
   const [fotoErroPorCampo, setFotoErroPorCampo] = useState<Record<string, string>>({})
   const [fotoPreviewTemp, setFotoPreviewTemp] = useState<Record<string, string>>({})
   const [modalConfirmarCancelarAberto, setModalConfirmarCancelarAberto] = useState(false)
   const [vistoriaDetalhe, setVistoriaDetalhe] = useState<Vistoria | null>(null)
+  const [detalheValores, setDetalheValores] = useState<Record<number, ValorCampoEdicao> | null>(null)
   const [vistoriaEmEdicaoId, setVistoriaEmEdicaoId] = useState<string | null>(null)
   const [modalAgendarAberto, setModalAgendarAberto] = useState(false)
   const [agendarCpfCliente, setAgendarCpfCliente] = useState('')
@@ -75,9 +224,36 @@ export function Vistorias() {
   const filtroStatusRef = useRef<HTMLDivElement>(null)
   const vistoriadorFiltroPadraoAplicado = useRef(false)
   const BUCKET_FOTOS = 'Fotos_vistoria'
+
+  const opcoesGrupoConfig = useMemo(() => {
+    const set = new Set<string>()
+    for (const g of GRUPOS_PADRAO_VISTORIA) set.add(g)
+    for (const c of camposVistoria) {
+      const g = c.grupo?.trim()
+      if (g) set.add(g)
+    }
+    return [...set].sort((a, b) => a.localeCompare(b, 'pt-BR'))
+  }, [camposVistoria])
+
   const DELIM_MULTI_FOTO = '|||'
-  const CAMPOS_MULTI_FOTO: (keyof VistoriaForm)[] = ['link_foto_telhado', 'link_foto_estrutura_telhado']
   const STATUS_COM_RELATORIO = ['Aprovado', 'Aprovado com obra']
+  const podeAdministracao =
+    user?.tipo_usuario === 'Administrador' || user?.tipo_usuario === 'Administrativo'
+
+  const [modalExcluirVistoriaAberto, setModalExcluirVistoriaAberto] = useState(false)
+  const [vistoriaParaExcluir, setVistoriaParaExcluir] = useState<Vistoria | null>(null)
+  const [excluindoVistoria, setExcluindoVistoria] = useState(false)
+
+  const [modalConfigCamposAberto, setModalConfigCamposAberto] = useState(false)
+  const [configCampoNome, setConfigCampoNome] = useState('')
+  const [configTipoCampo, setConfigTipoCampo] = useState<TipoCampoVistoria>('texto')
+  const [configCampoMultiFoto, setConfigCampoMultiFotos] = useState(false)
+  const [configCampoGrupo, setConfigCampoGrupo] = useState('Outros')
+  const [configSalvando, setConfigSalvando] = useState(false)
+  const [configEditandoId, setConfigEditandoId] = useState<number | null>(null)
+
+  const grupoConfigNoDropdown = opcoesGrupoConfig.includes(configCampoGrupo.trim())
+  const valorSelectGrupo = grupoConfigNoDropdown ? configCampoGrupo.trim() : VALOR_GRUPO_OUTRO
 
   const clientesFiltrados = clientes.filter((c) => {
     const q = clienteSearch.trim().toLowerCase()
@@ -186,9 +362,25 @@ export function Vistorias() {
     setUsuarios((data as Usuario[]) ?? [])
   }
 
+  async function carregarCamposVistoria() {
+    const { data, error } = await supabase.from('vistoria_campos').select('*').order('ordem', { ascending: true })
+    if (error) {
+      console.error(error)
+      return
+    }
+    setCamposVistoria(
+      (data ?? []).map((row) => {
+        const c = row as VistoriaCampo
+        return { ...c, tipo_campo: normalizarTipoCampo(c) }
+      })
+    )
+  }
+
   useEffect(() => {
     setCarregando(true)
-    Promise.all([carregarVistorias(), carregarClientes(), carregarUsuarios()]).finally(() => setCarregando(false))
+    Promise.all([carregarVistorias(), carregarClientes(), carregarUsuarios(), carregarCamposVistoria()]).finally(() =>
+      setCarregando(false)
+    )
   }, [user?.id, user?.tipo_usuario])
 
   useEffect(() => {
@@ -198,49 +390,81 @@ export function Vistorias() {
     }
   }, [user?.tipo_usuario])
 
-  function vistoriaToForm(v: Vistoria): Omit<VistoriaForm, 'id_responsaveis'> {
-    return {
-      cpf_cliente: v.cpf_cliente ?? '',
-      status: v.status,
-      tipo_padrao: v.tipo_padrao ?? '',
-      onde_ligado_inversor: v.onde_ligado_inversor ?? '',
-      percurso_cabo_inversor: v.percurso_cabo_inversor ?? '',
-      qtd_eletrodutos_inversor_cc: v.qtd_eletrodutos_inversor_cc != null ? String(v.qtd_eletrodutos_inversor_cc) : '',
-      qtd_eletrodutos_inversor_ca: v.qtd_eletrodutos_inversor_ca != null ? String(v.qtd_eletrodutos_inversor_ca) : '',
-      qtd_conduletes_inversor: v.qtd_conduletes_inversor != null ? String(v.qtd_conduletes_inversor) : '',
-      qtd_eletrodutos_padrao: v.qtd_eletrodutos_padrao != null ? String(v.qtd_eletrodutos_padrao) : '',
-      metragem_total_cabos_padrao: v.metragem_total_cabos_padrao != null ? String(v.metragem_total_cabos_padrao) : '',
-      link_foto_fachada: v.link_foto_fachada ?? '',
-      link_foto_padrao_entrada: v.link_foto_padrao_entrada ?? '',
-      link_foto_disjuntor_padrao: v.link_foto_disjuntor_padrao ?? '',
-      link_foto_poste_mais_proximo: v.link_foto_poste_mais_proximo ?? '',
-      link_foto_ramal_entrada: v.link_foto_ramal_entrada ?? '',
-      link_foto_local_inversor: v.link_foto_local_inversor ?? '',
-      link_foto_aterramento: v.link_foto_aterramento ?? '',
-      link_foto_estrutura_telhado: v.link_foto_estrutura_telhado ?? '',
-      link_foto_telhado: v.link_foto_telhado ?? '',
-      link_foto_print_mapa: v.link_foto_print_mapa ?? '',
-      link_foto_croqui: v.link_foto_croqui ?? '',
-      link_foto_relatorio_tecnico: v.link_foto_relatorio_tecnico ?? '',
-      observacao: v.observacao ?? '',
+  useEffect(() => {
+    if (!vistoriaDetalhe) {
+      setDetalheValores(null)
+      return
     }
-  }
+    let cancel = false
+    ;(async () => {
+      let campos = camposVistoria
+      if (campos.length === 0) {
+        const { data } = await supabase.from('vistoria_campos').select('*').order('ordem', { ascending: true })
+        campos = (data ?? []) as VistoriaCampo[]
+      }
+      const { data: valRows } = await supabase
+        .from('vistoria_campo_valores')
+        .select('campo_id, valor_texto, link_foto')
+        .eq('vistoria_id', vistoriaDetalhe.id)
+      if (cancel) return
+      const base = valoresVaziosPorCampos(campos)
+      for (const row of valRows ?? []) {
+        base[row.campo_id] = {
+          valorTexto: row.valor_texto ?? '',
+          linkFoto: row.link_foto ?? '',
+        }
+      }
+      preencherValoresLegadoVistoria(vistoriaDetalhe, campos, base)
+      setDetalheValores(base)
+      if (campos.length > 0 && camposVistoria.length === 0) {
+        setCamposVistoria(campos.map((c) => ({ ...c, tipo_campo: normalizarTipoCampo(c) })))
+      }
+    })()
+    return () => {
+      cancel = true
+    }
+  }, [vistoriaDetalhe, camposVistoria])
 
   async function abrirParaEdicao(v: Vistoria) {
-    const formFromV = vistoriaToForm(v)
+    let campos = camposVistoria
+    if (campos.length === 0) {
+      const { data } = await supabase.from('vistoria_campos').select('*').order('ordem', { ascending: true })
+      campos = (data ?? []) as VistoriaCampo[]
+      setCamposVistoria(campos.map((c) => ({ ...c, tipo_campo: normalizarTipoCampo(c) })))
+    }
+    const valoresBase = valoresVaziosPorCampos(campos)
+    const { data: valRows } = await supabase
+      .from('vistoria_campo_valores')
+      .select('campo_id, valor_texto, link_foto')
+      .eq('vistoria_id', v.id)
+    for (const row of valRows ?? []) {
+      valoresBase[row.campo_id] = {
+        valorTexto: row.valor_texto ?? '',
+        linkFoto: row.link_foto ?? '',
+      }
+    }
+    preencherValoresLegadoVistoria(v, campos, valoresBase)
+
     const { data: respData } = await supabase
       .from('vistoria_responsaveis')
       .select('id_usuario')
       .eq('vistoria_id', v.id)
     const idResponsaveis = (respData ?? []).map((r: { id_usuario: string }) => r.id_usuario)
-    setForm({ ...formFromV, id_responsaveis: idResponsaveis })
+    setForm({
+      cpf_cliente: v.cpf_cliente ?? '',
+      status: v.status,
+      valoresPorCampo: valoresBase,
+      id_responsaveis: idResponsaveis,
+    })
     const cliente = clientes.find((c) => c.cpf === v.cpf_cliente)
     setClienteSearch(cliente ? `${cliente.nome ?? ''} — ${cliente.cpf}`.trim() : v.cpf_cliente)
     setVistoriaEmEdicaoId(v.id)
     setClienteDropdownOpen(false)
     setFotoErroPorCampo({})
     setFotoPreviewTemp((prev) => {
-      Object.values(prev).forEach((url) => { if (url) URL.revokeObjectURL(url) })
+      Object.values(prev).forEach((url) => {
+        if (url) URL.revokeObjectURL(url)
+      })
       return {}
     })
     setModalAberto(true)
@@ -252,6 +476,114 @@ export function Vistorias() {
     setVistoriaEmEdicaoId(null)
     setForm(formVazio)
     setClienteSearch('')
+  }
+
+  function resetFormConfigCampo() {
+    setConfigEditandoId(null)
+    setConfigCampoNome('')
+    setConfigTipoCampo('texto')
+    setConfigCampoMultiFotos(false)
+    setConfigCampoGrupo('Outros')
+  }
+
+  function fecharConfigCampos() {
+    setModalConfigCamposAberto(false)
+    resetFormConfigCampo()
+  }
+
+  function abrirEditorCampoExistente(c: VistoriaCampo) {
+    setConfigEditandoId(c.id)
+    setConfigCampoNome(c.nome_campo)
+    setConfigTipoCampo(normalizarTipoCampo(c))
+    setConfigCampoMultiFotos(c.permite_multiplas_fotos)
+    setConfigCampoGrupo(c.grupo)
+  }
+
+  async function salvarCampoConfig(e: React.FormEvent) {
+    e.preventDefault()
+    if (!configCampoNome.trim()) {
+      setMensagem({ titulo: 'Campo obrigatório', texto: 'Informe o nome do campo.', tipo: 'erro' })
+      setModalMensagemAberto(true)
+      return
+    }
+    const grupoSalvar =
+      valorSelectGrupo === VALOR_GRUPO_OUTRO ? configCampoGrupo.trim() : valorSelectGrupo
+    if (valorSelectGrupo === VALOR_GRUPO_OUTRO && !grupoSalvar) {
+      setMensagem({
+        titulo: 'Grupo obrigatório',
+        texto: 'Escolha um grupo na lista ou digite o nome da seção em “Outro”.',
+        tipo: 'erro',
+      })
+      setModalMensagemAberto(true)
+      return
+    }
+    setConfigSalvando(true)
+    try {
+      const maxOrdem = camposVistoria.length ? Math.max(...camposVistoria.map((c) => c.ordem)) : 0
+      const permitirFotos = configTipoCampo === 'foto'
+      if (configEditandoId != null) {
+        const { error } = await supabase
+          .from('vistoria_campos')
+          .update({
+            nome_campo: configCampoNome.trim(),
+            tipo_campo: configTipoCampo,
+            permitir_fotos: permitirFotos,
+            permite_multiplas_fotos: permitirFotos ? configCampoMultiFoto : false,
+            grupo: grupoSalvar,
+          })
+          .eq('id', configEditandoId)
+        if (error) throw error
+        if (!permitirFotos) {
+          await supabase.from('vistoria_campo_valores').update({ link_foto: null }).eq('campo_id', configEditandoId)
+        }
+      } else {
+        const { error } = await supabase.from('vistoria_campos').insert({
+          chave: slugChaveCampo(configCampoNome),
+          nome_campo: configCampoNome.trim(),
+          tipo_campo: configTipoCampo,
+          permitir_fotos: permitirFotos,
+          permite_multiplas_fotos: permitirFotos ? configCampoMultiFoto : false,
+          grupo: grupoSalvar,
+          ordem: maxOrdem + 10,
+        })
+        if (error) throw error
+      }
+      await carregarCamposVistoria()
+      setMensagem({ titulo: 'Sucesso', texto: 'Campo salvo.', tipo: 'sucesso' })
+      setModalMensagemAberto(true)
+      resetFormConfigCampo()
+    } catch (err) {
+      setMensagem({
+        titulo: 'Erro',
+        texto: err instanceof Error ? err.message : 'Não foi possível salvar o campo.',
+        tipo: 'erro',
+      })
+      setModalMensagemAberto(true)
+    } finally {
+      setConfigSalvando(false)
+    }
+  }
+
+  async function excluirCampoConfig(c: VistoriaCampo) {
+    if (!window.confirm(`Excluir o campo "${c.nome_campo}"?`)) return
+    try {
+      const { error } = await supabase.from('vistoria_campos').delete().eq('id', c.id)
+      if (error) throw error
+      await carregarCamposVistoria()
+      if (configEditandoId === c.id) resetFormConfigCampo()
+      setMensagem({ titulo: 'Sucesso', texto: 'Campo excluído.', tipo: 'sucesso' })
+      setModalMensagemAberto(true)
+    } catch (err) {
+      setMensagem({
+        titulo: 'Erro',
+        texto:
+          err instanceof Error
+            ? err.message
+            : 'Não foi possível excluir (verifique se não há dados em vistorias para este campo).',
+        tipo: 'erro',
+      })
+      setModalMensagemAberto(true)
+    }
   }
 
   function perguntarCancelar() {
@@ -344,40 +676,55 @@ export function Vistorias() {
     return name.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 80)
   }
 
-  async function handleFotoChange(
-    fieldKey: keyof VistoriaForm,
-    file: File | null,
-    clearPreview?: () => void
-  ) {
-    setFotoErroPorCampo((prev) => ({ ...prev, [fieldKey]: '' }))
+  function fotoKey(campoId: number) {
+    return `c${campoId}`
+  }
+
+  async function handleFotoChange(campoId: number, file: File | null, clearPreview?: () => void) {
+    const fk = fotoKey(campoId)
+    setFotoErroPorCampo((prev) => ({ ...prev, [fk]: '' }))
     if (!file) {
-      setForm((f) => ({ ...f, [fieldKey]: '' }))
-      setFotoPreviewTemp((prev) => ({ ...prev, [fieldKey]: '' }))
+      setForm((f) => ({
+        ...f,
+        valoresPorCampo: {
+          ...f.valoresPorCampo,
+          [campoId]: { ...f.valoresPorCampo[campoId], valorTexto: '', linkFoto: '' },
+        },
+      }))
+      setFotoPreviewTemp((prev) => ({ ...prev, [fk]: '' }))
       return
     }
     if (!file.type.startsWith('image/')) {
-      setFotoErroPorCampo((prev) => ({ ...prev, [fieldKey]: 'Selecione uma imagem (JPG, PNG, etc.).' }))
+      setFotoErroPorCampo((prev) => ({ ...prev, [fk]: 'Selecione uma imagem (JPG, PNG, etc.).' }))
       return
     }
-    setFotoEnviando(fieldKey)
+    setFotoEnviando(fk)
     setFotoNomeEnviando(file.name)
     try {
-      const path = `${user?.id ?? 'anon'}/${Date.now()}_${String(fieldKey)}_${sanitizeFileName(file.name)}`
+      const path = `${user?.id ?? 'anon'}/${Date.now()}_c${campoId}_${sanitizeFileName(file.name)}`
       const { error } = await supabase.storage.from(BUCKET_FOTOS).upload(path, file, {
         contentType: file.type,
         upsert: true,
       })
       if (error) throw error
       const { data: { publicUrl } } = supabase.storage.from(BUCKET_FOTOS).getPublicUrl(path)
-      setForm((f) => ({ ...f, [fieldKey]: publicUrl }))
-      setFotoErroPorCampo((prev) => ({ ...prev, [fieldKey]: '' }))
+      setForm((f) => ({
+        ...f,
+        valoresPorCampo: {
+          ...f.valoresPorCampo,
+          [campoId]: { ...f.valoresPorCampo[campoId], valorTexto: '', linkFoto: publicUrl },
+        },
+      }))
+      setFotoErroPorCampo((prev) => ({ ...prev, [fk]: '' }))
       clearPreview?.()
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'Não foi possível enviar a foto.'
-      setFotoErroPorCampo((prev) => ({ ...prev, [fieldKey]: msg }))
+      setFotoErroPorCampo((prev) => ({ ...prev, [fk]: msg }))
       setMensagem({
         titulo: 'Erro no upload',
-        texto: msg + ' Verifique no Supabase: Storage > bucket "Fotos_vistoria" existe e está público (ou com política de upload).',
+        texto:
+          msg +
+          ' Verifique no Supabase: Storage > bucket "Fotos_vistoria" existe e está público (ou com política de upload).',
         tipo: 'erro',
       })
       setModalMensagemAberto(true)
@@ -387,21 +734,23 @@ export function Vistorias() {
     }
   }
 
-  async function handleFotoChangeMulti(fieldKey: keyof VistoriaForm, files: FileList | null) {
+  async function handleFotoChangeMulti(campoId: number, files: FileList | null) {
     if (!files?.length) return
     const arquivos = Array.from(files).filter((f) => f.type.startsWith('image/'))
+    const fk = fotoKey(campoId)
     if (arquivos.length === 0) {
-      setFotoErroPorCampo((prev) => ({ ...prev, [fieldKey]: 'Selecione apenas imagens (JPG, PNG, etc.).' }))
+      setFotoErroPorCampo((prev) => ({ ...prev, [fk]: 'Selecione apenas imagens (JPG, PNG, etc.).' }))
       return
     }
-    setFotoErroPorCampo((prev) => ({ ...prev, [fieldKey]: '' }))
-    setFotoEnviando(fieldKey)
+    setFotoErroPorCampo((prev) => ({ ...prev, [fk]: '' }))
+    setFotoEnviando(fk)
     setFotoNomeEnviando(`${arquivos.length} foto(s)`)
-    const urlsExistentes = ((form[fieldKey] as string) || '').trim().split(DELIM_MULTI_FOTO).filter(Boolean)
+    const atual = form.valoresPorCampo[campoId]?.linkFoto ?? ''
+    const urlsExistentes = atual.trim().split(DELIM_MULTI_FOTO).filter(Boolean)
     const novasUrls: string[] = []
     try {
       for (const file of arquivos) {
-        const path = `${user?.id ?? 'anon'}/${Date.now()}_${String(fieldKey)}_${sanitizeFileName(file.name)}`
+        const path = `${user?.id ?? 'anon'}/${Date.now()}_c${campoId}_${sanitizeFileName(file.name)}`
         const { error } = await supabase.storage.from(BUCKET_FOTOS).upload(path, file, {
           contentType: file.type,
           upsert: true,
@@ -412,14 +761,25 @@ export function Vistorias() {
       }
       setForm((f) => ({
         ...f,
-        [fieldKey]: [...urlsExistentes, ...novasUrls].join(DELIM_MULTI_FOTO),
+        valoresPorCampo: {
+          ...f.valoresPorCampo,
+          [campoId]: {
+            ...f.valoresPorCampo[campoId],
+            valorTexto: '',
+            linkFoto: [...urlsExistentes, ...novasUrls].join(DELIM_MULTI_FOTO),
+          },
+        },
       }))
     } catch (e) {
       setFotoErroPorCampo((prev) => ({
         ...prev,
-        [fieldKey]: e instanceof Error ? e.message : 'Erro ao enviar as fotos.',
+        [fk]: e instanceof Error ? e.message : 'Erro ao enviar as fotos.',
       }))
-      setMensagem({ titulo: 'Erro no upload', texto: e instanceof Error ? e.message : 'Erro ao enviar as fotos.', tipo: 'erro' })
+      setMensagem({
+        titulo: 'Erro no upload',
+        texto: e instanceof Error ? e.message : 'Erro ao enviar as fotos.',
+        tipo: 'erro',
+      })
       setModalMensagemAberto(true)
     } finally {
       setFotoEnviando(null)
@@ -427,9 +787,16 @@ export function Vistorias() {
     }
   }
 
-  function removerUmaFotoMulti(fieldKey: keyof VistoriaForm, urlToRemove: string) {
-    const urls = ((form[fieldKey] as string) || '').split(DELIM_MULTI_FOTO).filter((u) => u.trim() && u !== urlToRemove)
-    setForm((f) => ({ ...f, [fieldKey]: urls.join(DELIM_MULTI_FOTO) }))
+  function removerUmaFotoMulti(campoId: number, urlToRemove: string) {
+    const atual = form.valoresPorCampo[campoId]?.linkFoto ?? ''
+    const urls = atual.split(DELIM_MULTI_FOTO).filter((u) => u.trim() && u !== urlToRemove)
+    setForm((f) => ({
+      ...f,
+      valoresPorCampo: {
+        ...f.valoresPorCampo,
+        [campoId]: { ...f.valoresPorCampo[campoId], valorTexto: '', linkFoto: urls.join(DELIM_MULTI_FOTO) },
+      },
+    }))
   }
 
   function toggleResponsavel(id: string) {
@@ -441,16 +808,22 @@ export function Vistorias() {
     }))
   }
 
+  function valorTextoCampo(chave: string): string {
+    const c = camposVistoria.find((x) => x.chave === chave)
+    if (!c) return ''
+    return form.valoresPorCampo[c.id]?.valorTexto?.trim() ?? ''
+  }
+
   function validarObrigatorios(): string | null {
     if (!form.cpf_cliente.trim()) return 'Selecione o cliente (CPF).'
-    if (!form.tipo_padrao?.trim()) return 'Selecione o tipo do padrão.'
-    if (!form.onde_ligado_inversor?.trim()) return 'Selecione onde será ligado o inversor.'
-    if (!form.percurso_cabo_inversor?.trim()) return 'Preencha o percurso do cabo do inversor.'
-    const qtdCc = form.qtd_eletrodutos_inversor_cc?.trim()
-    const qtdCa = form.qtd_eletrodutos_inversor_ca?.trim()
-    const qtdCond = form.qtd_conduletes_inversor?.trim()
-    const qtdPad = form.qtd_eletrodutos_padrao?.trim()
-    const metr = form.metragem_total_cabos_padrao?.trim()
+    if (!valorTextoCampo('tipo_padrao')) return 'Selecione o tipo do padrão.'
+    if (!valorTextoCampo('onde_ligado_inversor')) return 'Selecione onde será ligado o inversor.'
+    if (!valorTextoCampo('percurso_cabo_inversor')) return 'Preencha o percurso do cabo do inversor.'
+    const qtdCc = valorTextoCampo('qtd_eletrodutos_inversor_cc')
+    const qtdCa = valorTextoCampo('qtd_eletrodutos_inversor_ca')
+    const qtdCond = valorTextoCampo('qtd_conduletes_inversor')
+    const qtdPad = valorTextoCampo('qtd_eletrodutos_padrao')
+    const metr = valorTextoCampo('metragem_total_cabos_padrao')
     if (qtdCc === '' || qtdCa === '' || qtdCond === '' || qtdPad === '' || metr === '') {
       return 'Preencha todos os campos de Eletrodutos e cabos (informe 0 se não houver).'
     }
@@ -470,38 +843,41 @@ export function Vistorias() {
 
     setSalvando(true)
     try {
+      const legado = montarPayloadVistoriasLegado(camposVistoria, form.valoresPorCampo)
       const payload = {
         cpf_cliente: form.cpf_cliente.trim(),
         status: form.status,
-        tipo_padrao: form.tipo_padrao || null,
-        onde_ligado_inversor: form.onde_ligado_inversor || null,
-        percurso_cabo_inversor: form.percurso_cabo_inversor.trim() || null,
-        qtd_eletrodutos_inversor_cc: form.qtd_eletrodutos_inversor_cc ? parseInt(form.qtd_eletrodutos_inversor_cc, 10) : null,
-        qtd_eletrodutos_inversor_ca: form.qtd_eletrodutos_inversor_ca ? parseInt(form.qtd_eletrodutos_inversor_ca, 10) : null,
-        qtd_conduletes_inversor: form.qtd_conduletes_inversor ? parseInt(form.qtd_conduletes_inversor, 10) : null,
-        qtd_eletrodutos_padrao: form.qtd_eletrodutos_padrao ? parseInt(form.qtd_eletrodutos_padrao, 10) : null,
-        metragem_total_cabos_padrao: form.metragem_total_cabos_padrao ? parseFloat(form.metragem_total_cabos_padrao) : null,
-        link_foto_fachada: form.link_foto_fachada.trim() || null,
-        link_foto_padrao_entrada: form.link_foto_padrao_entrada.trim() || null,
-        link_foto_disjuntor_padrao: form.link_foto_disjuntor_padrao.trim() || null,
-        link_foto_poste_mais_proximo: form.link_foto_poste_mais_proximo.trim() || null,
-        link_foto_ramal_entrada: form.link_foto_ramal_entrada.trim() || null,
-        link_foto_local_inversor: form.link_foto_local_inversor.trim() || null,
-        link_foto_aterramento: form.link_foto_aterramento.trim() || null,
-        link_foto_estrutura_telhado: form.link_foto_estrutura_telhado.trim() || null,
-      link_foto_telhado: form.link_foto_telhado.trim() || null,
-      link_foto_print_mapa: form.link_foto_print_mapa.trim() || null,
-      link_foto_croqui: form.link_foto_croqui.trim() || null,
-      link_foto_relatorio_tecnico: form.link_foto_relatorio_tecnico.trim() || null,
-      observacao: form.observacao.trim() || null,
-    }
+        ...legado,
+      }
+
+      async function persistirValoresCampos(vistoriaId: string) {
+        const rows = camposVistoria.map((c) => {
+          const v = form.valoresPorCampo[c.id] ?? { valorTexto: '', linkFoto: '' }
+          if (campoEhFoto(c)) {
+            return {
+              vistoria_id: vistoriaId,
+              campo_id: c.id,
+              valor_texto: null as string | null,
+              link_foto: v.linkFoto.trim() || null,
+            }
+          }
+          return {
+            vistoria_id: vistoriaId,
+            campo_id: c.id,
+            valor_texto: v.valorTexto.trim() || null,
+            link_foto: null as string | null,
+          }
+        })
+        const { error: errVal } = await supabase.from('vistoria_campo_valores').upsert(rows, {
+          onConflict: 'vistoria_id,campo_id',
+        })
+        if (errVal) throw errVal
+      }
 
       if (vistoriaEmEdicaoId) {
-        const { error } = await supabase
-          .from('vistorias')
-          .update(payload)
-          .eq('id', vistoriaEmEdicaoId)
+        const { error } = await supabase.from('vistorias').update(payload).eq('id', vistoriaEmEdicaoId)
         if (error) throw error
+        await persistirValoresCampos(vistoriaEmEdicaoId)
         await supabase.from('vistoria_responsaveis').delete().eq('vistoria_id', vistoriaEmEdicaoId)
         if (form.id_responsaveis.length > 0) {
           await supabase.from('vistoria_responsaveis').insert(
@@ -517,6 +893,9 @@ export function Vistorias() {
           .single()
         if (error) throw error
         const vistoriaId = vistoria?.id
+        if (vistoriaId) {
+          await persistirValoresCampos(vistoriaId)
+        }
         if (vistoriaId && form.id_responsaveis.length > 0) {
           await supabase.from('vistoria_responsaveis').insert(
             form.id_responsaveis.map((id_usuario) => ({ vistoria_id: vistoriaId, id_usuario }))
@@ -540,7 +919,346 @@ export function Vistorias() {
     navigate('/', { replace: true })
   }
 
-  function gerarRelatorioPdf(v: Vistoria) {
+  function patchValorCampo(campoId: number, patch: Partial<ValorCampoEdicao>) {
+    setForm((f) => ({
+      ...f,
+      valoresPorCampo: {
+        ...f.valoresPorCampo,
+        [campoId]: {
+          valorTexto: f.valoresPorCampo[campoId]?.valorTexto ?? '',
+          linkFoto: f.valoresPorCampo[campoId]?.linkFoto ?? '',
+          ...patch,
+        },
+      },
+    }))
+  }
+
+  function renderCampoDinamico(c: VistoriaCampo) {
+    const v = form.valoresPorCampo[c.id] ?? { valorTexto: '', linkFoto: '' }
+    const fk = fotoKey(c.id)
+    const enviando = fotoEnviando === fk
+    const valorLf = v.linkFoto?.trim() ?? ''
+    const urlsMulti = valorLf ? valorLf.split(DELIM_MULTI_FOTO).filter(Boolean) : []
+    const enviadaFoto = !enviando && (c.permite_multiplas_fotos ? urlsMulti.length > 0 : !!valorLf)
+    const previewUrl = !c.permite_multiplas_fotos && (fotoPreviewTemp[fk] || valorLf)
+
+    if (campoEhFoto(c) && c.permite_multiplas_fotos) {
+      return (
+        <>
+          <label className="form-label">{c.nome_campo} (pode selecionar várias)</label>
+          <input
+            type="file"
+            accept="image/*"
+            multiple
+            className="form-control form-control-sm mb-1"
+            disabled={enviando}
+            onChange={(e) => {
+              handleFotoChangeMulti(c.id, e.target.files)
+              e.target.value = ''
+            }}
+          />
+          {enviando && <span className="text-primary small d-block mb-1">{fotoNomeEnviando}</span>}
+          {urlsMulti.length > 0 && (
+            <div className="d-flex flex-wrap gap-2 mb-2">
+              {urlsMulti.map((url) => (
+                <div key={url} className="position-relative d-inline-block">
+                  <img
+                    src={url}
+                    alt="Preview"
+                    className="rounded border"
+                    style={{ maxHeight: 100, maxWidth: 100, objectFit: 'cover' }}
+                  />
+                  <button
+                    type="button"
+                    className="btn btn-sm btn-danger position-absolute top-0 end-0"
+                    style={{ padding: '0.1rem 0.35rem', fontSize: '0.75rem' }}
+                    onClick={() => removerUmaFotoMulti(c.id, url)}
+                    title="Remover esta foto"
+                  >
+                    ×
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+          <div className="min-height-status-foto">
+            {enviadaFoto && !enviando && (
+              <span className="text-success small fw-medium">{urlsMulti.length} foto(s) carregada(s)</span>
+            )}
+            {!enviando && urlsMulti.length === 0 && !fotoErroPorCampo[fk] && (
+              <span className="text-muted small">Nenhuma foto selecionada</span>
+            )}
+            {fotoErroPorCampo[fk] && (
+              <span className="text-danger small" role="alert">
+                Erro: {fotoErroPorCampo[fk]}
+              </span>
+            )}
+          </div>
+        </>
+      )
+    }
+
+    if (campoEhFoto(c)) {
+      return (
+        <>
+          <label className="form-label">{c.nome_campo}</label>
+          <input
+            type="file"
+            accept="image/*"
+            className="form-control form-control-sm mb-1"
+            disabled={enviando}
+            onChange={(e) => {
+              const file = e.target.files?.[0]
+              if (file) {
+                const objectUrl = URL.createObjectURL(file)
+                setFotoPreviewTemp((prev) => {
+                  const old = prev[fk]
+                  if (old) URL.revokeObjectURL(old)
+                  return { ...prev, [fk]: objectUrl }
+                })
+                handleFotoChange(c.id, file, () => {
+                  setFotoPreviewTemp((prev) => {
+                    const url = prev[fk]
+                    if (url) URL.revokeObjectURL(url)
+                    const next = { ...prev }
+                    delete next[fk]
+                    return next
+                  })
+                })
+              }
+              e.target.value = ''
+            }}
+          />
+          {previewUrl && (
+            <div className="mb-2">
+              <img
+                src={previewUrl}
+                alt="Preview"
+                className="rounded border"
+                style={{ maxHeight: 120, maxWidth: '100%', objectFit: 'contain' }}
+              />
+            </div>
+          )}
+          <div className="d-flex align-items-center gap-2 flex-wrap min-height-status-foto">
+            {enviando && (
+              <span className="text-primary small" title={fotoNomeEnviando}>
+                Enviando:{' '}
+                {fotoNomeEnviando
+                  ? fotoNomeEnviando.length > 25
+                    ? fotoNomeEnviando.slice(0, 25) + '…'
+                    : fotoNomeEnviando
+                  : '…'}
+              </span>
+            )}
+            {enviadaFoto && (
+              <>
+                <span className="text-success small fw-medium">✓ Foto carregada</span>
+                <button
+                  type="button"
+                  className="btn btn-outline-danger btn-sm"
+                  onClick={() => {
+                    patchValorCampo(c.id, { linkFoto: '', valorTexto: '' })
+                    setFotoPreviewTemp((prev) => {
+                      const url = prev[fk]
+                      if (url) URL.revokeObjectURL(url)
+                      const next = { ...prev }
+                      delete next[fk]
+                      return next
+                    })
+                  }}
+                >
+                  Remover
+                </button>
+              </>
+            )}
+            {!enviando && !enviadaFoto && !fotoErroPorCampo[fk] && (
+              <span className="text-muted small">Nenhuma foto selecionada</span>
+            )}
+            {fotoErroPorCampo[fk] && (
+              <span className="text-danger small" role="alert">
+                Erro: {fotoErroPorCampo[fk]}
+              </span>
+            )}
+          </div>
+        </>
+      )
+    }
+
+    if (c.chave === 'tipo_padrao') {
+      return (
+        <>
+          <label className="form-label">Tipo do padrão *</label>
+          <select
+            className="form-select"
+            value={v.valorTexto}
+            onChange={(e) => patchValorCampo(c.id, { valorTexto: e.target.value })}
+            required
+          >
+            <option value="">Selecione</option>
+            {TIPO_PADRAO.map((t) => (
+              <option key={t} value={t}>
+                {t}
+              </option>
+            ))}
+          </select>
+        </>
+      )
+    }
+
+    if (c.chave === 'onde_ligado_inversor') {
+      return (
+        <>
+          <label className="form-label">Onde será ligado o inversor *</label>
+          <select
+            className="form-select"
+            value={v.valorTexto}
+            onChange={(e) => patchValorCampo(c.id, { valorTexto: e.target.value })}
+            required
+          >
+            <option value="">Selecione</option>
+            {ONDE_LIGADO_INVERSOR.map((o) => (
+              <option key={o} value={o}>
+                {o}
+              </option>
+            ))}
+          </select>
+        </>
+      )
+    }
+
+    if (c.chave === 'percurso_cabo_inversor') {
+      return (
+        <>
+          <label className="form-label" title="Percurso do cabo do inversor até o padrão ou caixa de passagem">
+            Percurso cabo inversor (m) *
+          </label>
+          <input
+            type="number"
+            min={0}
+            step={1}
+            className="form-control"
+            value={v.valorTexto}
+            onChange={(e) => {
+              const val = e.target.value
+              if (val === '' || /^\d+$/.test(val)) patchValorCampo(c.id, { valorTexto: val })
+            }}
+            placeholder="Metros (inteiro)"
+            required
+          />
+        </>
+      )
+    }
+
+    if (c.chave.startsWith('qtd_')) {
+      return (
+        <>
+          <label className="form-label text-nowrap">{c.nome_campo} *</label>
+          <input
+            type="number"
+            min={0}
+            className="form-control"
+            value={v.valorTexto}
+            onChange={(e) => patchValorCampo(c.id, { valorTexto: e.target.value })}
+          />
+        </>
+      )
+    }
+
+    if (c.chave === 'metragem_total_cabos_padrao') {
+      return (
+        <>
+          <label className="form-label">Metragem total cabos padrão (m) *</label>
+          <input
+            type="number"
+            min={0}
+            step={0.01}
+            className="form-control"
+            value={v.valorTexto}
+            onChange={(e) => patchValorCampo(c.id, { valorTexto: e.target.value })}
+          />
+        </>
+      )
+    }
+
+    if (c.chave === 'observacao') {
+      return (
+        <>
+          <label className="form-label" htmlFor={`vistoria-observacao-${c.id}`}>
+            {c.nome_campo}
+          </label>
+          <textarea
+            id={`vistoria-observacao-${c.id}`}
+            className="form-control"
+            rows={3}
+            placeholder="Anotações gerais sobre a vistoria (opcional)"
+            value={v.valorTexto}
+            onChange={(e) => patchValorCampo(c.id, { valorTexto: e.target.value })}
+          />
+        </>
+      )
+    }
+
+    if (c.chave.startsWith('campo_') && normalizarTipoCampo(c) === 'numero') {
+      return (
+        <>
+          <label className="form-label">{c.nome_campo}</label>
+          <input
+            type="number"
+            className="form-control"
+            value={v.valorTexto}
+            onChange={(e) => patchValorCampo(c.id, { valorTexto: e.target.value })}
+          />
+        </>
+      )
+    }
+
+    return (
+      <>
+        <label className="form-label">{c.nome_campo}</label>
+        <input
+          type="text"
+          className="form-control"
+          value={v.valorTexto}
+          onChange={(e) => patchValorCampo(c.id, { valorTexto: e.target.value })}
+        />
+      </>
+    )
+  }
+
+  function solicitarExclusaoVistoria(v: Vistoria) {
+    setVistoriaParaExcluir(v)
+    setModalExcluirVistoriaAberto(true)
+  }
+
+  async function executarExclusaoVistoria() {
+    if (!vistoriaParaExcluir) return
+    setExcluindoVistoria(true)
+    try {
+      const { error } = await supabase.from('vistorias').delete().eq('id', vistoriaParaExcluir.id)
+      if (error) throw error
+      if (vistoriaDetalhe?.id === vistoriaParaExcluir.id) {
+        setVistoriaDetalhe(null)
+        setDetalheValores(null)
+      }
+      if (vistoriaEmEdicaoId === vistoriaParaExcluir.id) {
+        fecharModal()
+      }
+      setMensagem({ titulo: 'Sucesso', texto: 'Vistoria excluída.', tipo: 'sucesso' })
+      setModalMensagemAberto(true)
+      await carregarVistorias()
+    } catch (e) {
+      setMensagem({
+        titulo: 'Erro',
+        texto: e instanceof Error ? e.message : 'Não foi possível excluir a vistoria.',
+        tipo: 'erro',
+      })
+      setModalMensagemAberto(true)
+    } finally {
+      setExcluindoVistoria(false)
+    }
+  }
+
+  async function gerarRelatorioPdf(v: Vistoria) {
     const logoUrl = `${window.location.origin}/LogoJSX.PNG`
     const cliente = clientes.find((c) => c.cpf === v.cpf_cliente)
     const partesEndereco = [
@@ -553,44 +1271,50 @@ export function Vistorias() {
     ].filter(Boolean) as string[]
     const enderecoCompleto = partesEndereco.length > 0 ? partesEndereco.join(', ') : '—'
 
-    const fotoLabels: Record<string, string> = {
-      link_foto_fachada: 'Fachada do local',
-      link_foto_padrao_entrada: 'Padrão de entrada',
-      link_foto_disjuntor_padrao: 'Disjuntor padrão',
-      link_foto_poste_mais_proximo: 'Poste mais próximo',
-      link_foto_ramal_entrada: 'Ramal de entrada',
-      link_foto_local_inversor: 'Local do inversor',
-      link_foto_aterramento: 'Aterramento',
-      link_foto_estrutura_telhado: 'Estrutura do telhado',
-      link_foto_telhado: 'Telhado',
-      link_foto_print_mapa: 'Print do mapa',
-      link_foto_croqui: 'Croqui',
-      link_foto_relatorio_tecnico: 'Relatório técnico',
+    let campos = camposVistoria
+    if (campos.length === 0) {
+      const { data } = await supabase.from('vistoria_campos').select('*').order('ordem', { ascending: true })
+      campos = (data ?? []) as VistoriaCampo[]
     }
+    const { data: valRows } = await supabase
+      .from('vistoria_campo_valores')
+      .select('campo_id, valor_texto, link_foto')
+      .eq('vistoria_id', v.id)
+    const vals = valoresVaziosPorCampos(campos)
+    for (const row of valRows ?? []) {
+      vals[row.campo_id] = {
+        valorTexto: row.valor_texto ?? '',
+        linkFoto: row.link_foto ?? '',
+      }
+    }
+    preencherValoresLegadoVistoria(v, campos, vals)
+    const legado = montarPayloadVistoriasLegado(campos, vals)
 
-    const fotosHtml = (
-      [
-        'link_foto_fachada',
-        'link_foto_padrao_entrada',
-        'link_foto_disjuntor_padrao',
-        'link_foto_poste_mais_proximo',
-        'link_foto_ramal_entrada',
-        'link_foto_local_inversor',
-        'link_foto_aterramento',
-        'link_foto_estrutura_telhado',
-        'link_foto_telhado',
-        'link_foto_print_mapa',
-        'link_foto_croqui',
-        'link_foto_relatorio_tecnico',
-      ] as const
-    )
-      .map((key) => {
-        const val = v[key] as string | null | undefined
+    const fotosHtml = campos
+      .filter((c) => campoEhFoto(c))
+      .sort((a, b) => a.ordem - b.ordem)
+      .map((c) => {
+        const val = vals[c.id]?.linkFoto
         const urls = val?.trim() ? val.split(DELIM_MULTI_FOTO).filter(Boolean) : []
-        if (urls.length === 0) return `<p><strong>${fotoLabels[key]}:</strong> —</p>`
-        return `<p><strong>${fotoLabels[key]}:</strong><br/><div style="text-align:center;">${urls.map((u) => `<img src="${u}" alt="" style="max-width:200px;max-height:150px;margin:4px;" />`).join(' ')}</div></p>`
+        const label = c.nome_campo.replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        if (urls.length === 0) return `<p><strong>${label}:</strong> —</p>`
+        return `<p><strong>${label}:</strong><br/><div style="text-align:center;">${urls.map((u) => `<img src="${u}" alt="" style="max-width:200px;max-height:150px;margin:4px;" />`).join(' ')}</div></p>`
       })
       .join('')
+
+    const escRel = (s: string) =>
+      String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    const extrasLinhas = campos
+      .filter((c) => !campoEhFoto(c) && !LEGACY_CAMPO_PARA_COLUNA_VISTORIA[c.chave])
+      .sort((a, b) => a.ordem - b.ordem)
+      .map((c) => {
+        const t = vals[c.id]?.valorTexto?.trim()
+        if (!t) return ''
+        return `<tr><th>${escRel(c.nome_campo)}</th><td>${escRel(t)}</td></tr>`
+      })
+      .filter(Boolean)
+      .join('')
+    const extrasSecao = extrasLinhas ? `<h2>Outros campos</h2><table>${extrasLinhas}</table>` : ''
 
     const html = `
 <!DOCTYPE html>
@@ -627,24 +1351,26 @@ export function Vistorias() {
 
   <h2>Padrão e inversor</h2>
   <table>
-    <tr><th>Tipo do padrão</th><td>${v.tipo_padrao ?? '—'}</td></tr>
-    <tr><th>Onde ligado o inversor</th><td>${v.onde_ligado_inversor ?? '—'}</td></tr>
-    <tr><th>Percurso cabo inversor (m)</th><td>${v.percurso_cabo_inversor ?? '—'}</td></tr>
+    <tr><th>Tipo do padrão</th><td>${legado.tipo_padrao ?? '—'}</td></tr>
+    <tr><th>Onde ligado o inversor</th><td>${legado.onde_ligado_inversor ?? '—'}</td></tr>
+    <tr><th>Percurso cabo inversor (m)</th><td>${legado.percurso_cabo_inversor ?? '—'}</td></tr>
   </table>
 
   <h2>Eletrodutos e cabos</h2>
   <table>
-    <tr><th>Qtd. eletrod. inv. CC</th><td>${v.qtd_eletrodutos_inversor_cc ?? '—'}</td></tr>
-    <tr><th>Qtd. eletrod. inv. CA</th><td>${v.qtd_eletrodutos_inversor_ca ?? '—'}</td></tr>
-    <tr><th>Qtd. conduletes inv.</th><td>${v.qtd_conduletes_inversor ?? '—'}</td></tr>
-    <tr><th>Qtd. eletrod. padrão</th><td>${v.qtd_eletrodutos_padrao ?? '—'}</td></tr>
-    <tr><th>Metragem cabos padrão (m)</th><td>${v.metragem_total_cabos_padrao ?? '—'}</td></tr>
+    <tr><th>Qtd. eletrod. inv. CC</th><td>${legado.qtd_eletrodutos_inversor_cc ?? '—'}</td></tr>
+    <tr><th>Qtd. eletrod. inv. CA</th><td>${legado.qtd_eletrodutos_inversor_ca ?? '—'}</td></tr>
+    <tr><th>Qtd. conduletes inv.</th><td>${legado.qtd_conduletes_inversor ?? '—'}</td></tr>
+    <tr><th>Qtd. eletrod. padrão</th><td>${legado.qtd_eletrodutos_padrao ?? '—'}</td></tr>
+    <tr><th>Metragem cabos padrão (m)</th><td>${legado.metragem_total_cabos_padrao ?? '—'}</td></tr>
   </table>
 
   <h2>Fotos</h2>
   ${fotosHtml}
 
-  ${(v.observacao ?? '').trim() ? `<h2>Observação</h2><div class="observacao">${String(v.observacao).replace(/</g, '&lt;').replace(/>/g, '&gt;')}</div>` : ''}
+  ${extrasSecao}
+
+  ${(legado.observacao ?? '').trim() ? `<h2>Observação</h2><div class="observacao">${String(legado.observacao).replace(/</g, '&lt;').replace(/>/g, '&gt;')}</div>` : ''}
 
   <script>
     window.onload = function() { window.print(); window.onafterprint = function() { window.close(); }; };
@@ -664,6 +1390,7 @@ export function Vistorias() {
       <header className="page-header">
         <h1>Vistorias</h1>
         <nav className="nav-links">
+          <Link to="/dashboard">Dashboard</Link>
           <Link to="/vistorias">Vistorias</Link>
           <Link to="/instalacao">Instalação</Link>
           <Link to="/clientes">Clientes</Link>
@@ -678,10 +1405,22 @@ export function Vistorias() {
         <section className="card">
           <div className="card-header-row">
             <h2>Lista de vistorias</h2>
-            {(user?.tipo_usuario === 'Administrador' || user?.tipo_usuario === 'Administrativo') && (
-              <button type="button" className="btn btn-primary" onClick={abrirAgendar}>
-                Agendar Vistoria
-              </button>
+            {podeAdministracao && (
+              <>
+                <button
+                  type="button"
+                  className="btn btn-outline-primary me-2"
+                  onClick={() => {
+                    resetFormConfigCampo()
+                    setModalConfigCamposAberto(true)
+                  }}
+                >
+                  Campos da vistoria
+                </button>
+                <button type="button" className="btn btn-primary" onClick={abrirAgendar}>
+                  Agendar Vistoria
+                </button>
+              </>
             )}
           </div>
 
@@ -745,7 +1484,7 @@ export function Vistorias() {
                   )}
                 </div>
               </div>
-              <div className="col-6 col-md-2">
+              <div className="col-12 col-sm-6 col-md-2">
                 <label className="form-label small mb-1">Data início</label>
                 <input
                   type="date"
@@ -754,7 +1493,7 @@ export function Vistorias() {
                   onChange={(e) => setFiltroDataInicio(e.target.value)}
                 />
               </div>
-              <div className="col-6 col-md-2">
+              <div className="col-12 col-sm-6 col-md-2">
                 <label className="form-label small mb-1">Data fim</label>
                 <input
                   type="date"
@@ -810,22 +1549,41 @@ export function Vistorias() {
                       <td>{v.status}</td>
                       <td>{v.tipo_padrao ?? '—'}</td>
                       <td className="text-center">
-                        {STATUS_COM_RELATORIO.includes(v.status) && (
-                          <button
-                            type="button"
-                            className="btn btn-sm btn-outline-danger p-1"
-                            onClick={() => gerarRelatorioPdf(v)}
-                            title="Gerar relatório em PDF"
-                            aria-label="Gerar relatório em PDF"
-                          >
-                            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-                              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6zm-1 2 5 5h-5V4zm0 12H8v-2h5v2zm0-4H8v-2h5v2zm0-4H8v-2h5v2z"/>
-                            </svg>
-                          </button>
-                        )}
+                        <div className="d-inline-flex flex-wrap gap-1 justify-content-center align-items-center">
+                          {STATUS_COM_RELATORIO.includes(v.status) && (
+                            <button
+                              type="button"
+                              className="btn btn-sm btn-outline-danger p-1"
+                              onClick={() => {
+                                void gerarRelatorioPdf(v)
+                              }}
+                              title="Gerar relatório em PDF"
+                              aria-label="Gerar relatório em PDF"
+                            >
+                              <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6zm-1 2 5 5h-5V4zm0 12H8v-2h5v2zm0-4H8v-2h5v2zm0-4H8v-2h5v2z"/>
+                              </svg>
+                            </button>
+                          )}
+                          {podeAdministracao && (
+                            <button
+                              type="button"
+                              className="btn btn-sm btn-outline-secondary p-1"
+                              onClick={() => solicitarExclusaoVistoria(v)}
+                              title="Excluir vistoria"
+                              aria-label="Excluir vistoria"
+                            >
+                              <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+                                <path d="M5.5 5.5A.5.5 0 0 1 6 6v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5zm2.5 0a.5.5 0 0 1 .5.5v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5zm3 .5a.5.5 0 0 0-1 0v6a.5.5 0 0 0 1 0V6z" />
+                                <path d="M14.5 3a1 1 0 0 1-1 1H13v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V4h-.5a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1H6V1a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v1h3.5a1 1 0 0 1 1 1v1zM4.118 4 4 4.059V13a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V4.059L11.882 4H4.118zM2.5 3V2h11v1h-11z" />
+                              </svg>
+                            </button>
+                          )}
+                        </div>
                       </td>
                     </tr>
-                  )})}
+                    )
+                  })}
                 </tbody>
               </table>
             </div>
@@ -923,280 +1681,24 @@ export function Vistorias() {
               </div>
             </section>
 
-            <section className="vistoria-section mb-3 mb-md-4">
-              <h6 className="vistoria-section-title">Padrão e inversor</h6>
-              <div className="row g-2 g-md-3">
-                <div className="col-12 col-sm-6">
-                  <label className="form-label">Tipo do padrão *</label>
-                  <select
-                    className="form-select"
-                    value={form.tipo_padrao}
-                    onChange={(e) => setForm((f) => ({ ...f, tipo_padrao: e.target.value }))}
-                    required
-                  >
-                    <option value="">Selecione</option>
-                    {TIPO_PADRAO.map((t) => (
-                      <option key={t} value={t}>
-                        {t}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div className="col-12 col-sm-6">
-                  <label className="form-label">Onde será ligado o inversor *</label>
-                  <select
-                    className="form-select"
-                    value={form.onde_ligado_inversor}
-                    onChange={(e) => setForm((f) => ({ ...f, onde_ligado_inversor: e.target.value }))}
-                    required
-                  >
-                    <option value="">Selecione</option>
-                    {ONDE_LIGADO_INVERSOR.map((o) => (
-                      <option key={o} value={o}>
-                        {o}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div className="col-12 col-sm-6 col-md-4">
-                  <label className="form-label" title="Percurso do cabo do inversor até o padrão ou caixa de passagem">
-                    Percurso cabo inversor (m) *
-                  </label>
-                  <input
-                    type="number"
-                    min={0}
-                    step={1}
-                    className="form-control"
-                    value={form.percurso_cabo_inversor}
-                    onChange={(e) => {
-                      const v = e.target.value
-                      if (v === '' || /^\d+$/.test(v)) setForm((f) => ({ ...f, percurso_cabo_inversor: v }))
-                    }}
-                    placeholder="Metros (inteiro)"
-                    required
-                  />
-                </div>
-              </div>
-            </section>
-
-            <section className="vistoria-section mb-3 mb-md-4">
-              <h6 className="vistoria-section-title">Eletrodutos e cabos *</h6>
-              <div className="row g-2 g-md-3 align-items-end">
-                <div className="col-6 col-md-4 col-lg-3">
-                  <label className="form-label text-nowrap" title="Quantidade de eletrodutos inversor CC">Qtd. eletrod. inv. CC *</label>
-                  <input
-                    type="number"
-                    min={0}
-                    className="form-control"
-                    value={form.qtd_eletrodutos_inversor_cc}
-                    onChange={(e) => setForm((f) => ({ ...f, qtd_eletrodutos_inversor_cc: e.target.value }))}
-                  />
-                </div>
-                <div className="col-6 col-md-4 col-lg-3">
-                  <label className="form-label text-nowrap" title="Quantidade de eletrodutos inversor CA">Qtd. eletrod. inv. CA *</label>
-                  <input
-                    type="number"
-                    min={0}
-                    className="form-control"
-                    value={form.qtd_eletrodutos_inversor_ca}
-                    onChange={(e) => setForm((f) => ({ ...f, qtd_eletrodutos_inversor_ca: e.target.value }))}
-                  />
-                </div>
-                <div className="col-6 col-md-4 col-lg-3">
-                  <label className="form-label text-nowrap">Qtd. conduletes inv. *</label>
-                  <input
-                    type="number"
-                    min={0}
-                    className="form-control"
-                    value={form.qtd_conduletes_inversor}
-                    onChange={(e) => setForm((f) => ({ ...f, qtd_conduletes_inversor: e.target.value }))}
-                  />
-                </div>
-                <div className="col-6 col-md-4 col-lg-3">
-                  <label className="form-label text-nowrap">Qtd. eletrod. padrão *</label>
-                  <input
-                    type="number"
-                    min={0}
-                    className="form-control"
-                    value={form.qtd_eletrodutos_padrao}
-                    onChange={(e) => setForm((f) => ({ ...f, qtd_eletrodutos_padrao: e.target.value }))}
-                  />
-                </div>
-                <div className="col-12 col-lg-6">
-                  <label className="form-label">Metragem total cabos padrão (m) *</label>
-                  <input
-                    type="number"
-                    min={0}
-                    step={0.01}
-                    className="form-control"
-                    value={form.metragem_total_cabos_padrao}
-                    onChange={(e) => setForm((f) => ({ ...f, metragem_total_cabos_padrao: e.target.value }))}
-                  />
-                </div>
-              </div>
-            </section>
-
-            <section className="vistoria-section mb-3 mb-md-4">
-              <h6 className="vistoria-section-title">Fotos</h6>
-              <div className="row g-2 g-md-3">
-                {[
-                  { key: 'link_foto_fachada' as const, label: 'Foto fachada do local' },
-                  { key: 'link_foto_padrao_entrada' as const, label: 'Foto padrão de entrada' },
-                  { key: 'link_foto_disjuntor_padrao' as const, label: 'Foto disjuntor do padrão de entrada' },
-                  { key: 'link_foto_poste_mais_proximo' as const, label: 'Foto do poste mais próximo' },
-                  { key: 'link_foto_ramal_entrada' as const, label: 'Foto do ramal de entrada' },
-                  { key: 'link_foto_local_inversor' as const, label: 'Foto do local do inversor' },
-                  { key: 'link_foto_aterramento' as const, label: 'Foto do aterramento do sistema' },
-                  { key: 'link_foto_estrutura_telhado' as const, label: 'Foto da estrutura do telhado' },
-                  { key: 'link_foto_telhado' as const, label: 'Foto do telhado' },
-                  { key: 'link_foto_print_mapa' as const, label: 'Foto do print do mapa' },
-                  { key: 'link_foto_croqui' as const, label: 'Foto do croqui' },
-                  { key: 'link_foto_relatorio_tecnico' as const, label: 'Foto do relatório técnico' },
-                ].map(({ key, label }) => {
-                  const isMulti = CAMPOS_MULTI_FOTO.includes(key)
-                  const enviando = fotoEnviando === key
-                  const valor = (form[key] as string)?.trim() ?? ''
-                  const urlsMulti = valor ? valor.split(DELIM_MULTI_FOTO).filter(Boolean) : []
-                  const enviada = !enviando && (isMulti ? urlsMulti.length > 0 : !!valor)
-                  const previewUrl = !isMulti && (fotoPreviewTemp[key] || valor)
-
-                  if (isMulti) {
-                    return (
-                      <div className="col-12 col-sm-6 col-lg-4 vistoria-foto-cell" key={key}>
-                        <label className="form-label">{label} (pode selecionar várias)</label>
-                        <input
-                          type="file"
-                          accept="image/*"
-                          multiple
-                          className="form-control form-control-sm mb-1"
-                          disabled={enviando}
-                          onChange={(e) => {
-                            handleFotoChangeMulti(key, e.target.files)
-                            e.target.value = ''
-                          }}
-                        />
-                        {enviando && (
-                          <span className="text-primary small d-block mb-1">{fotoNomeEnviando}</span>
-                        )}
-                        {urlsMulti.length > 0 && (
-                          <div className="d-flex flex-wrap gap-2 mb-2">
-                            {urlsMulti.map((url) => (
-                              <div key={url} className="position-relative d-inline-block">
-                                <img
-                                  src={url}
-                                  alt="Preview"
-                                  className="rounded border"
-                                  style={{ maxHeight: 100, maxWidth: 100, objectFit: 'cover' }}
-                                />
-                                <button
-                                  type="button"
-                                  className="btn btn-sm btn-danger position-absolute top-0 end-0"
-                                  style={{ padding: '0.1rem 0.35rem', fontSize: '0.75rem' }}
-                                  onClick={() => removerUmaFotoMulti(key, url)}
-                                  title="Remover esta foto"
-                                >
-                                  ×
-                                </button>
-                              </div>
-                            ))}
-                          </div>
-                        )}
-                        <div className="min-height-status-foto">
-                          {enviada && !enviando && (
-                            <span className="text-success small fw-medium">{urlsMulti.length} foto(s) carregada(s)</span>
-                          )}
-                          {!enviando && urlsMulti.length === 0 && !fotoErroPorCampo[key] && (
-                            <span className="text-muted small">Nenhuma foto selecionada</span>
-                          )}
-                          {fotoErroPorCampo[key] && (
-                            <span className="text-danger small" role="alert">Erro: {fotoErroPorCampo[key]}</span>
-                          )}
-                        </div>
+            {ordemGruposCampos(camposVistoria).map((grupo) => (
+              <section key={grupo} className="vistoria-section mb-3 mb-md-4">
+                <h6 className="vistoria-section-title">
+                  {grupo}
+                  {grupo === 'Eletrodutos e cabos' ? ' *' : ''}
+                </h6>
+                <div className="row g-2 g-md-3 align-items-end">
+                  {camposVistoria
+                    .filter((c) => c.grupo === grupo)
+                    .sort((a, b) => a.ordem - b.ordem)
+                    .map((c) => (
+                      <div key={c.id} className={colClassCampoVistoria(c)}>
+                        {renderCampoDinamico(c)}
                       </div>
-                    )
-                  }
-
-                  return (
-                    <div className="col-12 col-sm-6 col-lg-4 vistoria-foto-cell" key={key}>
-                      <label className="form-label">{label}</label>
-                      <input
-                        type="file"
-                        accept="image/*"
-                        className="form-control form-control-sm mb-1"
-                        disabled={enviando}
-                        onChange={(e) => {
-                          const f = e.target.files?.[0]
-                          if (f) {
-                            const objectUrl = URL.createObjectURL(f)
-                            setFotoPreviewTemp((prev) => {
-                              const old = prev[key]
-                              if (old) URL.revokeObjectURL(old)
-                              return { ...prev, [key]: objectUrl }
-                            })
-                            handleFotoChange(key, f, () => {
-                              setFotoPreviewTemp((prev) => {
-                                const url = prev[key]
-                                if (url) URL.revokeObjectURL(url)
-                                const next = { ...prev }
-                                delete next[key]
-                                return next
-                              })
-                            })
-                          }
-                          e.target.value = ''
-                        }}
-                      />
-                      {previewUrl && (
-                        <div className="mb-2">
-                          <img
-                            src={previewUrl}
-                            alt="Preview"
-                            className="rounded border"
-                            style={{ maxHeight: 120, maxWidth: '100%', objectFit: 'contain' }}
-                          />
-                        </div>
-                      )}
-                      <div className="d-flex align-items-center gap-2 flex-wrap min-height-status-foto">
-                        {enviando && (
-                          <span className="text-primary small" title={fotoNomeEnviando}>
-                            Enviando: {fotoNomeEnviando ? (fotoNomeEnviando.length > 25 ? fotoNomeEnviando.slice(0, 25) + '…' : fotoNomeEnviando) : '…'}
-                          </span>
-                        )}
-                        {enviada && (
-                          <>
-                            <span className="text-success small fw-medium">✓ Foto carregada</span>
-                            <button
-                              type="button"
-                              className="btn btn-outline-danger btn-sm"
-                              onClick={() => {
-                                setForm((f) => ({ ...f, [key]: '' }))
-                                setFotoPreviewTemp((prev) => {
-                                  const url = prev[key]
-                                  if (url) URL.revokeObjectURL(url)
-                                  const next = { ...prev }
-                                  delete next[key]
-                                  return next
-                                })
-                              }}
-                            >
-                              Remover
-                            </button>
-                          </>
-                        )}
-                        {!enviando && !enviada && !fotoErroPorCampo[key] && (
-                          <span className="text-muted small">Nenhuma foto selecionada</span>
-                        )}
-                        {fotoErroPorCampo[key] && (
-                          <span className="text-danger small" role="alert">
-                            Erro: {fotoErroPorCampo[key]}
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                  )
-                })}
-              </div>
-            </section>
+                    ))}
+                </div>
+              </section>
+            ))}
 
             <section className="vistoria-section mb-0">
               <h6 className="vistoria-section-title">Responsáveis *</h6>
@@ -1222,18 +1724,6 @@ export function Vistorias() {
                 <p className="text-muted small mb-0">Nenhum usuário cadastrado.</p>
               )}
             </section>
-
-            <section className="vistoria-section mb-0">
-              <label className="form-label" htmlFor="vistoria-observacao">Observação</label>
-              <textarea
-                id="vistoria-observacao"
-                className="form-control"
-                rows={3}
-                placeholder="Anotações gerais sobre a vistoria (opcional)"
-                value={form.observacao}
-                onChange={(e) => setForm((f) => ({ ...f, observacao: e.target.value }))}
-              />
-            </section>
           </BSModal.Body>
           <BSModal.Footer>
             <button type="button" className="btn btn-secondary" onClick={perguntarCancelar}>
@@ -1250,6 +1740,7 @@ export function Vistorias() {
         show={modalAgendarAberto}
         onHide={fecharAgendar}
         centered
+        scrollable
         className="vistoria-modal"
       >
         <form onSubmit={handleSalvarAgendar}>
@@ -1357,7 +1848,10 @@ export function Vistorias() {
 
       <BSModal
         show={!!vistoriaDetalhe}
-        onHide={() => setVistoriaDetalhe(null)}
+        onHide={() => {
+          setVistoriaDetalhe(null)
+          setDetalheValores(null)
+        }}
         size="lg"
         centered
         scrollable
@@ -1400,92 +1894,250 @@ export function Vistorias() {
                 </dl>
               </section>
 
-              <section className="vistoria-section mb-3 mb-md-4">
-                <h6 className="vistoria-section-title">Padrão e inversor</h6>
-                <dl className="row g-2 mb-0 small">
-                  <dt className="col-sm-4 text-secondary">Tipo do padrão</dt>
-                  <dd className="col-sm-8">{vistoriaDetalhe.tipo_padrao ?? '—'}</dd>
-                  <dt className="col-sm-4 text-secondary">Onde ligado o inversor</dt>
-                  <dd className="col-sm-8">{vistoriaDetalhe.onde_ligado_inversor ?? '—'}</dd>
-                  <dt className="col-sm-4 text-secondary">Percurso cabo inversor (m)</dt>
-                  <dd className="col-sm-8">{vistoriaDetalhe.percurso_cabo_inversor ?? '—'}</dd>
-                </dl>
-              </section>
-
-              <section className="vistoria-section mb-3 mb-md-4">
-                <h6 className="vistoria-section-title">Eletrodutos e cabos</h6>
-                <dl className="row g-2 mb-0 small">
-                  <dt className="col-sm-4 text-secondary">Qtd. eletrod. inv. CC</dt>
-                  <dd className="col-sm-8">{vistoriaDetalhe.qtd_eletrodutos_inversor_cc ?? '—'}</dd>
-                  <dt className="col-sm-4 text-secondary">Qtd. eletrod. inv. CA</dt>
-                  <dd className="col-sm-8">{vistoriaDetalhe.qtd_eletrodutos_inversor_ca ?? '—'}</dd>
-                  <dt className="col-sm-4 text-secondary">Qtd. conduletes inv.</dt>
-                  <dd className="col-sm-8">{vistoriaDetalhe.qtd_conduletes_inversor ?? '—'}</dd>
-                  <dt className="col-sm-4 text-secondary">Qtd. eletrod. padrão</dt>
-                  <dd className="col-sm-8">{vistoriaDetalhe.qtd_eletrodutos_padrao ?? '—'}</dd>
-                  <dt className="col-sm-4 text-secondary">Metragem cabos padrão (m)</dt>
-                  <dd className="col-sm-8">{vistoriaDetalhe.metragem_total_cabos_padrao ?? '—'}</dd>
-                </dl>
-              </section>
-
-              <section className="vistoria-section mb-3 mb-md-4">
-                <h6 className="vistoria-section-title">Fotos</h6>
-                <div className="row g-2 g-md-3">
-                  {[
-                    { key: 'link_foto_fachada' as const, label: 'Fachada do local' },
-                    { key: 'link_foto_padrao_entrada' as const, label: 'Padrão de entrada' },
-                    { key: 'link_foto_disjuntor_padrao' as const, label: 'Disjuntor padrão' },
-                    { key: 'link_foto_poste_mais_proximo' as const, label: 'Poste mais próximo' },
-                    { key: 'link_foto_ramal_entrada' as const, label: 'Ramal de entrada' },
-                    { key: 'link_foto_local_inversor' as const, label: 'Local do inversor' },
-                    { key: 'link_foto_aterramento' as const, label: 'Aterramento' },
-                    { key: 'link_foto_estrutura_telhado' as const, label: 'Estrutura do telhado' },
-                    { key: 'link_foto_telhado' as const, label: 'Telhado' },
-                    { key: 'link_foto_print_mapa' as const, label: 'Print do mapa' },
-                    { key: 'link_foto_croqui' as const, label: 'Croqui' },
-                    { key: 'link_foto_relatorio_tecnico' as const, label: 'Relatório técnico' },
-                  ].map(({ key, label }) => {
-                    const val = vistoriaDetalhe[key] as string | null | undefined
-                    const urls = val?.trim() ? val.split(DELIM_MULTI_FOTO).filter(Boolean) : []
-                    if (urls.length === 0) {
+              {!detalheValores ? (
+                <p className="text-muted small">Carregando campos…</p>
+              ) : (
+                <>
+                  {ordemGruposCampos(camposVistoria).map((grupo) => {
+                    const list = camposVistoria
+                      .filter((c) => c.grupo === grupo)
+                      .sort((a, b) => a.ordem - b.ordem)
+                    if (list.length === 0) return null
+                    if (grupo === 'Fotos') {
                       return (
-                        <div className="col-6 col-md-4 col-lg-3" key={key}>
-                          <div className="small text-secondary mb-1">{label}</div>
-                          <span className="text-muted small">—</span>
-                        </div>
+                        <section key={grupo} className="vistoria-section mb-3 mb-md-4">
+                          <h6 className="vistoria-section-title">Fotos</h6>
+                          <div className="row g-2 g-md-3">
+                            {list.map((c) => {
+                              const val = detalheValores[c.id]?.linkFoto
+                              const urls = val?.trim() ? val.split(DELIM_MULTI_FOTO).filter(Boolean) : []
+                              const label = c.nome_campo
+                              if (urls.length === 0) {
+                                return (
+                                  <div className="col-6 col-md-4 col-lg-3" key={c.id}>
+                                    <div className="small text-secondary mb-1">{label}</div>
+                                    <span className="text-muted small">—</span>
+                                  </div>
+                                )
+                              }
+                              return (
+                                <div className="col-6 col-md-4 col-lg-3" key={c.id}>
+                                  <div className="small text-secondary mb-1">{label}</div>
+                                  <div className="d-flex flex-wrap gap-1">
+                                    {urls.map((url) => (
+                                      <a key={url} href={url} target="_blank" rel="noopener noreferrer" className="d-inline-block">
+                                        <img
+                                          src={url}
+                                          alt={label}
+                                          className="rounded border"
+                                          style={{ maxHeight: 80, maxWidth: 80, objectFit: 'cover' }}
+                                        />
+                                      </a>
+                                    ))}
+                                  </div>
+                                </div>
+                              )
+                            })}
+                          </div>
+                        </section>
+                      )
+                    }
+                    if (grupo === 'Observação') {
+                      const obs = list[0]
+                      const txt = obs ? detalheValores[obs.id]?.valorTexto?.trim() ?? '' : ''
+                      if (!txt) return null
+                      return (
+                        <section key={grupo} className="vistoria-section mb-0">
+                          <h6 className="vistoria-section-title">Observação</h6>
+                          <p className="small mb-0 text-break">{txt}</p>
+                        </section>
                       )
                     }
                     return (
-                      <div className="col-6 col-md-4 col-lg-3" key={key}>
-                        <div className="small text-secondary mb-1">{label}</div>
-                        <div className="d-flex flex-wrap gap-1">
-                          {urls.map((url) => (
-                            <a key={url} href={url} target="_blank" rel="noopener noreferrer" className="d-inline-block">
-                              <img src={url} alt={label} className="rounded border" style={{ maxHeight: 80, maxWidth: 80, objectFit: 'cover' }} />
-                            </a>
-                          ))}
-                        </div>
-                      </div>
+                      <section key={grupo} className="vistoria-section mb-3 mb-md-4">
+                        <h6 className="vistoria-section-title">{grupo}</h6>
+                        <dl className="row g-2 mb-0 small">
+                          {list
+                            .filter((c) => !campoEhFoto(c))
+                            .map((c) => (
+                              <div className="row w-100 m-0" key={c.id}>
+                                <dt className="col-sm-4 text-secondary">{c.nome_campo}</dt>
+                                <dd className="col-sm-8">{detalheValores[c.id]?.valorTexto?.trim() || '—'}</dd>
+                              </div>
+                            ))}
+                        </dl>
+                      </section>
                     )
                   })}
-                </div>
-              </section>
-
-              {(vistoriaDetalhe.observacao ?? '').trim() && (
-                <section className="vistoria-section mb-0">
-                  <h6 className="vistoria-section-title">Observação</h6>
-                  <p className="small mb-0 text-break">{vistoriaDetalhe.observacao}</p>
-                </section>
+                </>
               )}
             </>
             )
           })()}
         </BSModal.Body>
         <BSModal.Footer>
-          <button type="button" className="btn btn-secondary" onClick={() => setVistoriaDetalhe(null)}>
+          <button
+            type="button"
+            className="btn btn-secondary"
+            onClick={() => {
+              setVistoriaDetalhe(null)
+              setDetalheValores(null)
+            }}
+          >
             Fechar
           </button>
         </BSModal.Footer>
+      </BSModal>
+
+      <BSModal show={modalConfigCamposAberto} onHide={fecharConfigCampos} size="lg" centered scrollable className="vistoria-modal">
+        <form onSubmit={salvarCampoConfig}>
+          <BSModal.Header closeButton>
+            <BSModal.Title className="h5 mb-0">Campos da vistoria</BSModal.Title>
+          </BSModal.Header>
+          <BSModal.Body className="modal-body-scroll py-3 py-md-4">
+            <p className="small text-muted mb-3">
+              Defina quais campos aparecem no modal Editar vistoria. Escolha o tipo: <strong>Foto</strong> (arquivos em{' '}
+              <code>link_foto</code>), <strong>Texto</strong> ou <strong>Números</strong> (valores em{' '}
+              <code>valor_texto</code>).
+            </p>
+            <div className="table-responsive mb-4">
+              <table className="table table-sm table-striped align-middle">
+                <thead>
+                  <tr>
+                    <th>Nome</th>
+                    <th>Grupo</th>
+                    <th>Tipo</th>
+                    <th>Múltiplas</th>
+                    <th className="text-end">Ações</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {[...camposVistoria]
+                    .sort((a, b) => a.ordem - b.ordem)
+                    .map((c) => (
+                      <tr key={c.id}>
+                        <td>{c.nome_campo}</td>
+                        <td className="small">{c.grupo}</td>
+                        <td>{rotuloTipoCampo(c)}</td>
+                        <td>{campoEhFoto(c) && c.permite_multiplas_fotos ? 'Sim' : '—'}</td>
+                        <td className="text-end text-nowrap">
+                          <button
+                            type="button"
+                            className="btn btn-sm btn-outline-primary me-1"
+                            onClick={() => abrirEditorCampoExistente(c)}
+                          >
+                            Editar
+                          </button>
+                          <button
+                            type="button"
+                            className="btn btn-sm btn-outline-danger"
+                            onClick={() => excluirCampoConfig(c)}
+                          >
+                            Excluir
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                </tbody>
+              </table>
+              {camposVistoria.length === 0 && <p className="text-muted small mb-0">Nenhum campo cadastrado.</p>}
+            </div>
+            <h6 className="vistoria-section-title mb-3">{configEditandoId != null ? 'Editar campo' : 'Novo campo'}</h6>
+            <div className="row g-2 g-md-3">
+              <div className="col-12">
+                <label className="form-label">Nome do campo *</label>
+                <input
+                  type="text"
+                  className="form-control"
+                  value={configCampoNome}
+                  onChange={(e) => setConfigCampoNome(e.target.value)}
+                  placeholder="Ex.: Foto do medidor"
+                />
+              </div>
+              <div className="col-12 col-sm-6">
+                <label className="form-label">Tipo do campo *</label>
+                <select
+                  className="form-select"
+                  value={configTipoCampo}
+                  onChange={(e) => {
+                    const v = e.target.value as TipoCampoVistoria
+                    setConfigTipoCampo(v)
+                    if (v !== 'foto') setConfigCampoMultiFotos(false)
+                  }}
+                >
+                  <option value="foto">Foto</option>
+                  <option value="texto">Texto</option>
+                  <option value="numero">Números</option>
+                </select>
+              </div>
+              <div className="col-12 col-sm-6">
+                <label className="form-label" htmlFor="cfg-grupo-vistoria">
+                  Grupo (seção no formulário)
+                </label>
+                <select
+                  id="cfg-grupo-vistoria"
+                  className="form-select"
+                  value={valorSelectGrupo}
+                  onChange={(e) => {
+                    const v = e.target.value
+                    if (v === VALOR_GRUPO_OUTRO) setConfigCampoGrupo('')
+                    else setConfigCampoGrupo(v)
+                  }}
+                >
+                  {opcoesGrupoConfig.map((g) => (
+                    <option key={g} value={g}>
+                      {g}
+                    </option>
+                  ))}
+                  <option value={VALOR_GRUPO_OUTRO}>Outro (digite abaixo)…</option>
+                </select>
+                {valorSelectGrupo === VALOR_GRUPO_OUTRO && (
+                  <input
+                    type="text"
+                    className="form-control mt-2"
+                    value={configCampoGrupo}
+                    onChange={(e) => setConfigCampoGrupo(e.target.value)}
+                    placeholder="Nome da seção"
+                    aria-label="Nome personalizado da seção"
+                  />
+                )}
+              </div>
+              {configTipoCampo === 'foto' && (
+                <div className="col-12">
+                  <div className="form-check">
+                    <input
+                      type="checkbox"
+                      className="form-check-input"
+                      id="cfg-multi-fotos"
+                      checked={configCampoMultiFoto}
+                      onChange={(e) => setConfigCampoMultiFotos(e.target.checked)}
+                    />
+                    <label className="form-check-label" htmlFor="cfg-multi-fotos">
+                      Permitir várias fotos neste campo
+                    </label>
+                  </div>
+                </div>
+              )}
+            </div>
+          </BSModal.Body>
+          <BSModal.Footer className="flex-wrap gap-2">
+            <button
+              type="button"
+              className="btn btn-outline-secondary"
+              onClick={() => {
+                resetFormConfigCampo()
+              }}
+            >
+              Limpar formulário
+            </button>
+            <button type="button" className="btn btn-secondary" onClick={fecharConfigCampos}>
+              Fechar
+            </button>
+            <button type="submit" className="btn btn-primary" disabled={configSalvando}>
+              {configSalvando ? 'Salvando…' : 'Salvar campo'}
+            </button>
+          </BSModal.Footer>
+        </form>
       </BSModal>
 
       <ModalConfirmar
@@ -1496,6 +2148,26 @@ export function Vistorias() {
         confirmarTexto="Sim, cancelar"
         cancelarTexto="Não"
         onConfirmar={fecharModal}
+      />
+
+      <ModalConfirmar
+        aberto={modalExcluirVistoriaAberto}
+        onFechar={() => {
+          if (!excluindoVistoria) {
+            setModalExcluirVistoriaAberto(false)
+            setVistoriaParaExcluir(null)
+          }
+        }}
+        titulo="Excluir vistoria?"
+        mensagem={
+          vistoriaParaExcluir
+            ? `Confirma excluir esta vistoria (CPF ${vistoriaParaExcluir.cpf_cliente})? Esta ação não pode ser desfeita.`
+            : ''
+        }
+        confirmarTexto="Excluir"
+        cancelarTexto="Cancelar"
+        emConfirmacao={excluindoVistoria}
+        onConfirmar={executarExclusaoVistoria}
       />
 
       <ModalMensagem
