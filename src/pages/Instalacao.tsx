@@ -1598,7 +1598,7 @@ export function Instalacao() {
                         const camposTexto = list.filter((c) => !campoEhFotoInstalacao(c))
 
                         function renderCelulasFoto(c: InstalacaoCampo) {
-                          const val = detalheValores[c.id]?.linkFoto
+                          const val = detalheValores?.[c.id]?.linkFoto
                           const urls = val?.trim() ? val.split(DELIM_MULTI_FOTO).filter(Boolean) : []
                           const label = c.nome_campo
                           if (urls.length === 0) {
@@ -1637,7 +1637,7 @@ export function Instalacao() {
                         if (grupo === 'Observação') {
                           const txt =
                             camposTexto[0] != null
-                              ? detalheValores[camposTexto[0].id]?.valorTexto?.trim() ?? ''
+                              ? detalheValores?.[camposTexto[0].id]?.valorTexto?.trim() ?? ''
                               : ''
                           if (camposFoto.length === 0 && !txt) return null
                           return (
@@ -1666,7 +1666,7 @@ export function Instalacao() {
                                 {camposTexto.map((c) => (
                                   <div className="row w-100 m-0" key={c.id}>
                                     <dt className="col-sm-4 text-secondary">{c.nome_campo}</dt>
-                                    <dd className="col-sm-8">{detalheValores[c.id]?.valorTexto?.trim() || '—'}</dd>
+                                    <dd className="col-sm-8">{detalheValores?.[c.id]?.valorTexto?.trim() || '—'}</dd>
                                   </div>
                                 ))}
                               </dl>
